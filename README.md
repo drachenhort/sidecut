@@ -1,45 +1,30 @@
 # flac2mp3
 
-Recursively transcode a folder of FLAC files to MP3, in place, with a simple
-text-based interactive UI.
+A native Qt/KDE window to recursively transcode a folder of FLAC files to
+MP3, in place.
 
 ## Requirements
 
 - `ffmpeg` on `PATH`
 - Python 3.10+
-- `pip install -r requirements.txt` (just `mutagen`, used for tag copying)
+- `pip install -r requirements.txt` (`mutagen` for tag copying, `PySide6`
+  for the GUI — auto-follows your KDE Plasma/Breeze theme)
 
 ## Usage
 
 ```bash
-python3 flac2mp3.py                       # interactive folder browser + quality prompt
-python3 flac2mp3.py /path/to/music        # prompts for quality only
-python3 flac2mp3.py /path/to/music --quality v0 --yes   # fully non-interactive
+python3 flac2mp3.py                  # opens the window, folder unset
+python3 flac2mp3.py /path/to/music   # opens the window with the folder pre-filled
 ```
 
-When no folder is given and you're running in a real terminal, a curses
-folder browser opens: `Up`/`Down` (or `j`/`k`) to move, `Enter` to open a
-subfolder, `Backspace`/`h` to go up, `Space` to choose the current folder,
-`q`/`Esc` to cancel (falls back to typing a path).
+In the window:
 
-Options:
-
-- `--quality {v0,v2,cbr320}` — MP3 quality preset (V0 VBR, V2 VBR, or 320kbps CBR)
-- `--yes` — skip the confirmation prompt
-- `--workers N` — number of parallel ffmpeg jobs (default: up to 4, based on CPU count)
-- `--plain` — disable the live dashboard and use one `\r`-updated progress
-  line instead (useful when piping output to a file/log)
-
-## Live progress window
-
-When run in a real terminal, `flac2mp3` shows a live dashboard (similar in
-spirit to `radiotop`'s live view): one line per active `ffmpeg` worker with
-its current file, percent complete, elapsed time, and encode speed, plus a
-scrolling list of recently finished files. It updates a few times a second
-by reading `ffmpeg`'s machine-readable `-progress` stream.
-
-When stdout isn't a TTY (piped, redirected to a file, or run with
-`--plain`), it automatically falls back to a single progress line instead.
+1. **Browse...** to pick the folder to scan recursively (native KDE folder
+   dialog).
+2. Choose a **quality** preset and the number of **parallel jobs**.
+3. **Start** — each file gets its own row with a live progress bar
+   (percent, encode speed) fed from ffmpeg's `-progress` stream. **Cancel**
+   stops queued files immediately and lets in-flight ones finish or abort.
 
 ## Behavior
 
@@ -52,11 +37,19 @@ When stdout isn't a TTY (piped, redirected to a file, or run with
   `ACOUSTID_ID`, `ACOUSTID_FINGERPRINT`, `MUSICBRAINZ_*`, and
   `REPLAYGAIN_*` — well-known tags map to standard ID3v2 frames, everything
   else is kept as a `TXXX` frame so nothing is silently dropped.
+- Embedded cover art (front/back covers, etc.) is copied as ID3 `APIC`
+  frames.
 - A log file `flac2mp3-<timestamp>.log` is written in the scanned root
   folder, containing ffmpeg output for any failures.
-- Re-running the script on the same folder is safe: files that already
-  converted no longer have a `.flac` source and are skipped automatically,
-  so an interrupted run on a large library can simply be restarted.
+- Re-running on the same folder is safe: files that already converted no
+  longer have a `.flac` source and are skipped automatically, so an
+  interrupted run on a large library can simply be restarted.
+
+## Code layout
+
+- `core.py` — framework-agnostic conversion logic (scanning, ffmpeg
+  invocation, tag/picture copying); no Qt dependency, directly unit tested.
+- `flac2mp3.py` — the PySide6 window and its background conversion thread.
 
 ## Tests
 
