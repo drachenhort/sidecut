@@ -22,6 +22,19 @@ Options:
 - `--quality {v0,v2,cbr320}` — MP3 quality preset (V0 VBR, V2 VBR, or 320kbps CBR)
 - `--yes` — skip the confirmation prompt
 - `--workers N` — number of parallel ffmpeg jobs (default: up to 4, based on CPU count)
+- `--plain` — disable the live dashboard and use one `\r`-updated progress
+  line instead (useful when piping output to a file/log)
+
+## Live progress window
+
+When run in a real terminal, `flac2mp3` shows a live dashboard (similar in
+spirit to `radiotop`'s live view): one line per active `ffmpeg` worker with
+its current file, percent complete, elapsed time, and encode speed, plus a
+scrolling list of recently finished files. It updates a few times a second
+by reading `ffmpeg`'s machine-readable `-progress` stream.
+
+When stdout isn't a TTY (piped, redirected to a file, or run with
+`--plain`), it automatically falls back to a single progress line instead.
 
 ## Behavior
 

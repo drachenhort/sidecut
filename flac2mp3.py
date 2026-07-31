@@ -5,9 +5,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
+import curses
 import os
 import shutil
 import sys
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -51,6 +54,19 @@ class ConversionResult:
     source: Path
     ok: bool
     message: str = ""
+
+
+@dataclass
+class WorkerStatus:
+    """Live ffmpeg progress for one in-flight conversion, shown in the dashboard."""
+
+    slot: int
+    filename: str
+    total_duration: float | None = None
+    out_time: str = "00:00:00.000000"
+    out_time_seconds: float = 0.0
+    speed: str = ""
+    percent: float = 0.0
 
 
 def check_dependencies() -> None:
@@ -104,23 +120,49 @@ def copy_tags(src: Path, dst: Path) -> None:
     id3.save(dst, v2_version=3)
 
 
-async def run_ffmpeg(src: Path, dst: Path, quality_args: list[str], log: TextIO) -> bool:
+def _apply_progress_line(status: WorkerStatus, line: str) -> None:
+    """Parse one `-progress pipe:1` key=value line into a WorkerStatus."""
+    key, sep, value = line.partition("=")
+    if not sep:
+        return
+    if key == "out_time_ms":
+        with contextlib.suppress(ValueError):
+            status.out_time_seconds = int(value) / 1_000_000
+    elif key == "out_time":
+        status.out_time = value
+    elif key == "speed":
+        status.speed = value.strip()
+    if status.total_duration:
+        status.percent = min(100.0, status.out_time_seconds / status.total_duration * 100)
+
+
+async def run_ffmpeg(
+    src: Path, dst: Path, quality_args: list[str], log: TextIO, status: WorkerStatus | None = None
+) -> bool:
     cmd = [
-        "ffmpeg", "-y", "-nostdin", "-loglevel", "error",
-        "-i", str(src), "-map_metadata", "-1", *quality_args, str(dst),
+        "ffmpeg", "-y", "-nostdin", "-loglevel", "error", "-nostats",
+        "-i", str(src), "-map_metadata", "-1", *quality_args,
+        "-progress", "pipe:1", str(dst),
     ]
     proc = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
-    output = await proc.communicate()
-    if output[0]:
-        log.write(output[0].decode(errors="replace"))
+    assert proc.stdout is not None and proc.stderr is not None
+    async for raw_line in proc.stdout:
+        if status is not None:
+            _apply_progress_line(status, raw_line.decode(errors="replace").strip())
+    stderr = await proc.stderr.read()
+    await proc.wait()
+    if stderr:
+        log.write(stderr.decode(errors="replace"))
     return proc.returncode == 0
 
 
-async def convert_one(src: Path, quality_args: list[str], log: TextIO) -> ConversionResult:
+async def convert_one(
+    src: Path, quality_args: list[str], log: TextIO, status: WorkerStatus | None = None
+) -> ConversionResult:
     dst = src.with_suffix(".mp3")
-    ok = await run_ffmpeg(src, dst, quality_args, log)
+    ok = await run_ffmpeg(src, dst, quality_args, log, status)
     ok = ok and dst.is_file() and dst.stat().st_size > 0
 
     if ok:
@@ -162,6 +204,109 @@ async def convert_all(
     return results
 
 
+def _track_duration(path: Path) -> float | None:
+    try:
+        return FLAC(path).info.length
+    except Exception:  # noqa: BLE001 - duration is cosmetic, never fatal
+        return None
+
+
+async def _dashboard_worker(
+    path: Path,
+    quality_args: list[str],
+    log: TextIO,
+    slot_queue: asyncio.Queue[int],
+    workers_status: list[WorkerStatus | None],
+    results: list[ConversionResult],
+    history: deque[str],
+) -> None:
+    slot = await slot_queue.get()
+    status = WorkerStatus(slot=slot, filename=path.name, total_duration=_track_duration(path))
+    workers_status[slot] = status
+    result = await convert_one(path, quality_args, log, status)
+    workers_status[slot] = None
+    slot_queue.put_nowait(slot)
+    results.append(result)
+    history.appendleft(f"{'OK  ' if result.ok else 'FAIL'} {path.name}")
+
+
+def _addstr(stdscr: "curses._CursesWindow", y: int, x: int, width: int, text: str) -> None:
+    with contextlib.suppress(curses.error):
+        stdscr.addstr(y, x, text[: max(0, width - x - 1)])
+
+
+def _draw_dashboard(
+    stdscr: "curses._CursesWindow",
+    workers_status: list[WorkerStatus | None],
+    history: deque[str],
+    total: int,
+    results: list[ConversionResult],
+) -> None:
+    height, width = stdscr.getmaxyx()
+    ok = sum(r.ok for r in results)
+    fail = len(results) - ok
+    stdscr.erase()
+    _addstr(stdscr, 0, 0, width, f"flac2mp3 - {len(results)}/{total} done (ok {ok}, fail {fail})")
+
+    row = 2
+    for status in workers_status:
+        if status is None or row >= height:
+            continue
+        bar = f"[{status.slot}] {status.percent:5.1f}% {status.out_time[:8]} {status.speed:>7}  {status.filename}"
+        _addstr(stdscr, row, 0, width, bar)
+        row += 1
+
+    row += 1
+    if row < height:
+        _addstr(stdscr, row, 0, width, "Recent:")
+        row += 1
+    for line in list(history)[: max(0, height - row)]:
+        _addstr(stdscr, row, 0, width, line)
+        row += 1
+    stdscr.refresh()
+
+
+async def convert_all_with_dashboard(
+    stdscr: "curses._CursesWindow", files: list[Path], quality: str, log_path: Path, workers: int
+) -> list[ConversionResult]:
+    quality_args = QUALITY_PRESETS[quality]
+    slot_queue: asyncio.Queue[int] = asyncio.Queue()
+    for i in range(workers):
+        slot_queue.put_nowait(i)
+    workers_status: list[WorkerStatus | None] = [None] * workers
+    results: list[ConversionResult] = []
+    history: deque[str] = deque(maxlen=50)
+    curses.curs_set(0)
+
+    with log_path.open("a", encoding="utf-8") as log:
+        tasks = [
+            asyncio.create_task(
+                _dashboard_worker(f, quality_args, log, slot_queue, workers_status, results, history)
+            )
+            for f in files
+        ]
+        while not all(task.done() for task in tasks):
+            _draw_dashboard(stdscr, workers_status, history, len(files), results)
+            await asyncio.sleep(0.2)
+        await asyncio.gather(*tasks)
+
+    _draw_dashboard(stdscr, workers_status, history, len(files), results)
+    return results
+
+
+def convert_library(
+    files: list[Path], quality: str, log_path: Path, workers: int, plain: bool = False
+) -> list[ConversionResult]:
+    """Run the batch conversion. Uses a live curses dashboard on a real
+    terminal; falls back to a single progress line when output isn't a
+    TTY (piped/logged/non-interactive runs) or when --plain is passed."""
+    if not plain and sys.stdout.isatty():
+        return curses.wrapper(
+            lambda stdscr: asyncio.run(convert_all_with_dashboard(stdscr, files, quality, log_path, workers))
+        )
+    return asyncio.run(convert_all(files, quality, log_path, workers))
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Recursively transcode FLAC files to MP3.")
     parser.add_argument("folder", nargs="?", type=Path, help="Root folder to scan (prompted if omitted)")
@@ -169,6 +314,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--yes", action="store_true", help="Skip the confirmation prompt")
     parser.add_argument(
         "--workers", type=int, default=min(4, os.cpu_count() or 1), help="Parallel ffmpeg jobs"
+    )
+    parser.add_argument(
+        "--plain", action="store_true", help="Use plain progress output instead of the live dashboard"
     )
     return parser.parse_args()
 
@@ -201,7 +349,7 @@ def main() -> None:
         return
 
     log_path = root / f"flac2mp3-{datetime.now():%Y%m%d-%H%M%S}.log"
-    results = asyncio.run(convert_all(files, quality, log_path, args.workers))
+    results = convert_library(files, quality, log_path, args.workers, plain=args.plain)
 
     ok_count = sum(r.ok for r in results)
     fail_count = len(results) - ok_count

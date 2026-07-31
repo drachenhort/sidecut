@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file.
 ## [Unreleased]
 
 ### Added
+- Live curses dashboard (`radiotop`-style) showing per-worker current file,
+  percent complete, elapsed time, and encode speed, parsed from ffmpeg's
+  `-progress` stream, plus a scrolling list of recently finished files.
+  Falls back automatically to the plain progress line when stdout isn't a
+  TTY, or when `--plain` is passed.
 - Initial version of `flac2mp3.py`: recursively scans a folder for `.flac`
   files and transcodes them to MP3 in place via `ffmpeg`.
 - Simple interactive text UI (folder path, quality preset, confirmation)
