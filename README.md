@@ -12,10 +12,15 @@ text-based interactive UI.
 ## Usage
 
 ```bash
-python3 flac2mp3.py                       # prompts for folder + quality
+python3 flac2mp3.py                       # interactive folder browser + quality prompt
 python3 flac2mp3.py /path/to/music        # prompts for quality only
 python3 flac2mp3.py /path/to/music --quality v0 --yes   # fully non-interactive
 ```
+
+When no folder is given and you're running in a real terminal, a curses
+folder browser opens: `Up`/`Down` (or `j`/`k`) to move, `Enter` to open a
+subfolder, `Backspace`/`h` to go up, `Space` to choose the current folder,
+`q`/`Esc` to cancel (falls back to typing a path).
 
 Options:
 

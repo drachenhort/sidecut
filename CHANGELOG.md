@@ -5,6 +5,9 @@ All notable changes to this project are documented in this file.
 ## [Unreleased]
 
 ### Added
+- Interactive curses folder browser when no folder argument is given
+  (Enter to open a subfolder, Space to choose it, Backspace to go up);
+  falls back to typing a path when cancelled or run without a TTY.
 - Live curses dashboard (`radiotop`-style) showing per-worker current file,
   percent complete, elapsed time, and encode speed, parsed from ffmpeg's
   `-progress` stream, plus a scrolling list of recently finished files.

@@ -88,6 +88,57 @@ def prompt_root_folder(default: Path) -> Path:
         print(f"Not a directory: {candidate}")
 
 
+def _subdirectories(path: Path) -> list[Path]:
+    try:
+        entries = [p for p in path.iterdir() if p.is_dir() and not p.name.startswith(".")]
+    except (PermissionError, OSError):
+        entries = []
+    return sorted(entries, key=lambda p: p.name.lower())
+
+
+def pick_folder(stdscr: "curses._CursesWindow", start: Path) -> Path | None:
+    """Interactive folder browser: Up/Down or j/k to move, Enter to open a
+    subfolder, Backspace/h to go up, Space to choose the current folder,
+    q/Esc to cancel."""
+    curses.curs_set(0)
+    current = start.resolve()
+    index = 0
+
+    while True:
+        entries = _subdirectories(current)
+        height, width = stdscr.getmaxyx()
+        stdscr.erase()
+        _addstr(stdscr, 0, 0, width, "Select a folder: Enter=open  Space=choose  Backspace=up  q=cancel")
+        _addstr(stdscr, 1, 0, width, f"Current: {current}")
+        for i, entry in enumerate(entries[: max(0, height - 3)]):
+            marker = ">" if i == index else " "
+            _addstr(stdscr, 3 + i, 0, width, f"{marker} {entry.name}/")
+        stdscr.refresh()
+
+        key = stdscr.getch()
+        if key in (curses.KEY_UP, ord("k")):
+            index = max(0, index - 1)
+        elif key in (curses.KEY_DOWN, ord("j")) and entries:
+            index = min(len(entries) - 1, index + 1)
+        elif key in (curses.KEY_ENTER, 10, 13) and entries:
+            current, index = entries[index], 0
+        elif key in (curses.KEY_BACKSPACE, 127, 8, curses.KEY_LEFT, ord("h")):
+            current, index = current.parent, 0
+        elif key == ord(" "):
+            return current
+        elif key in (ord("q"), 27):
+            return None
+
+
+def prompt_root_folder_interactive(default: Path) -> Path:
+    if sys.stdout.isatty():
+        selected = curses.wrapper(lambda stdscr: pick_folder(stdscr, default))
+        if selected is not None:
+            return selected
+        print("Folder selection cancelled - type a path instead.")
+    return prompt_root_folder(default)
+
+
 def prompt_quality() -> str:
     keys = list(QUALITY_PRESETS)
     print("Choose MP3 quality:")
@@ -330,7 +381,7 @@ def main() -> None:
             sys.exit(f"error: not a directory: {args.folder}")
         root = args.folder
     else:
-        root = prompt_root_folder(Path.cwd())
+        root = prompt_root_folder_interactive(Path.cwd())
 
     files = find_flac_files(root)
     if not files:
