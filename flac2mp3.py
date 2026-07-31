@@ -209,10 +209,13 @@ class MainWindow(QMainWindow):
         self.overall_bar.setValue(self._completed)
 
     def _on_batch_finished(self, ok_count: int, fail_count: int, log_path: str) -> None:
-        self.start_button.setEnabled(True)
+        # Leave the table as-is (per-file Done/Failed results) so the run can
+        # be reviewed; Browse a folder again to start a new batch. Start
+        # stays disabled since self.files now points at already-converted
+        # (deleted) sources.
+        self.start_button.setEnabled(False)
         self.cancel_button.setEnabled(False)
         self.status_label.setText(f"Converted: {ok_count}  Failed: {fail_count}  Log: {log_path}")
-        self._set_folder(Path(self.folder_edit.text()))  # refresh: converted files are gone
 
 
 def main() -> None:
