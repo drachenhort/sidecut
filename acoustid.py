@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QSpinBox,
@@ -174,6 +175,7 @@ class LidarrImportWorker(QThread):
 
     import_finished = Signal(int, int, str)  # imported_count, skipped_count, "; "-joined skipped names
     import_error = Signal(str)
+    import_progress = Signal(str)  # one line per step, e.g. "Submitting batch 2/5..."
 
     def __init__(
         self, base_url: str, api_key: str, folder: Path, local_root: str = "", lidarr_root: str = ""
@@ -186,9 +188,18 @@ class LidarrImportWorker(QThread):
         self.lidarr_root = lidarr_root
 
     def run(self) -> None:
+        # Qt signal emission is thread-safe: emitting from this worker
+        # thread queues the connected slot to run on the receiver's own
+        # thread (the GUI thread), so this callback never touches widgets
+        # directly.
         try:
             imported, skipped, skipped_names = lidarr.import_folder(
-                self.base_url, self.api_key, self.folder, local_root=self.local_root, lidarr_root=self.lidarr_root
+                self.base_url,
+                self.api_key,
+                self.folder,
+                local_root=self.local_root,
+                lidarr_root=self.lidarr_root,
+                on_progress=self.import_progress.emit,
             )
         except lidarr.LidarrError as exc:
             self.import_error.emit(str(exc))
@@ -215,6 +226,44 @@ class LidarrConnectionTestWorker(QThread):
             self.test_error.emit(str(exc))
             return
         self.test_finished.emit(version)
+
+
+class LidarrImportLogWindow(QDialog):
+    """Modeless window that streams LidarrImportWorker's progress lines live,
+    so a multi-minute import (many albums, many batches) never looks like
+    it's just hanging - every step Lidarr responds to shows up here as it
+    happens. Stays open after the import finishes/fails so the log can
+    still be reviewed, and is reused (cleared, not recreated) across
+    consecutive imports."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Lidarr import")
+        self.resize(640, 400)
+        # Not modal: this must stay usable/visible while the rest of the
+        # main window (folder browsing, other actions) stays interactive.
+        self.setModal(False)
+
+        layout = QVBoxLayout(self)
+        self.text = QPlainTextEdit(self)
+        self.text.setReadOnly(True)
+        self.text.setMaximumBlockCount(5000)
+        font = self.text.font()
+        font.setFamily("monospace")
+        self.text.setFont(font)
+        layout.addWidget(self.text)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(self.close)
+        buttons.button(QDialogButtonBox.Close).clicked.connect(self.close)
+        layout.addWidget(buttons)
+
+    def reset(self, title: str) -> None:
+        self.setWindowTitle(title)
+        self.text.clear()
+
+    def append_line(self, message: str) -> None:
+        self.text.appendPlainText(message)
 
 
 class LidarrSettingsDialog(QDialog):
@@ -377,6 +426,7 @@ class MainWindow(QMainWindow):
         self.files: list[Path] = []
         self.converter: BatchConverter | None = None
         self.lidarr_worker: LidarrImportWorker | None = None
+        self.lidarr_log_window: LidarrImportLogWindow | None = None
         self.library_stats_worker: LibraryStatsWorker | None = None
         self.library_stats_window: LibraryStatsWindow | None = None
         self.settings = QSettings("AcoustID", "AcoustID")
@@ -662,7 +712,14 @@ class MainWindow(QMainWindow):
         self.lidarr_import_button.setEnabled(False)
         self.status_label.setText(f"Handing {folder} to Lidarr's Manual Import API...")
 
+        if self.lidarr_log_window is None:
+            self.lidarr_log_window = LidarrImportLogWindow(self)
+        self.lidarr_log_window.reset(f"Lidarr import - {folder.name}")
+        self.lidarr_log_window.show()
+        self.lidarr_log_window.raise_()
+
         self.lidarr_worker = LidarrImportWorker(base_url, api_key, folder, local_root, lidarr_root)
+        self.lidarr_worker.import_progress.connect(self.lidarr_log_window.append_line)
         self.lidarr_worker.import_finished.connect(self._on_lidarr_import_finished)
         self.lidarr_worker.import_error.connect(self._on_lidarr_import_error)
         self.lidarr_worker.start()
@@ -678,6 +735,8 @@ class MainWindow(QMainWindow):
     def _on_lidarr_import_error(self, message: str) -> None:
         self.lidarr_import_button.setEnabled(True)
         self.status_label.setText(f"Lidarr import failed: {message}")
+        if self.lidarr_log_window is not None:
+            self.lidarr_log_window.append_line(f"FAILED: {message}")
         QMessageBox.critical(self, "Lidarr import failed", message)
 
     def _start_library_stats_scan(self) -> None:

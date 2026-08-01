@@ -32,9 +32,17 @@ from __future__ import annotations
 import re
 import time
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable
 
 import requests
+
+OnProgress = Callable[[str], None] | None
+
+
+def _report(on_progress: OnProgress, message: str) -> None:
+    if on_progress is not None:
+        on_progress(message)
+
 
 REQUEST_TIMEOUT = 30.0
 # The manual-import scan does real work per file server-side (reading
@@ -464,7 +472,12 @@ def delete_trackfile(base_url: str, api_key: str, trackfile_id: int) -> None:
 
 
 def _delete_genuinely_stale_trackfiles(
-    base_url: str, api_key: str, trackfiles: list[dict[str, Any]], local_root: str, lidarr_root: str
+    base_url: str,
+    api_key: str,
+    trackfiles: list[dict[str, Any]],
+    local_root: str,
+    lidarr_root: str,
+    on_progress: OnProgress = None,
 ) -> int:
     """Shared safety-checked deletion loop: only ever deletes a record
     after confirming, via a real filesystem check (honoring
@@ -487,11 +500,13 @@ def _delete_genuinely_stale_trackfiles(
             time.sleep(TRACKFILE_DELETE_PAUSE)
         delete_trackfile(base_url, api_key, trackfile["id"])
         deleted += 1
+        _report(on_progress, f"Lidarr: deleted stale trackfile record for {local_path.name}")
     return deleted
 
 
 def clear_stale_trackfiles(
-    base_url: str, api_key: str, album_id: int, local_root: str = "", lidarr_root: str = ""
+    base_url: str, api_key: str, album_id: int, local_root: str = "", lidarr_root: str = "",
+    on_progress: OnProgress = None,
 ) -> int:
     """Delete only the TrackFile records for `album_id` whose file is
     genuinely gone from disk - never a blanket "clear the album" sweep.
@@ -501,11 +516,12 @@ def clear_stale_trackfiles(
     the safety check. Returns how many genuinely stale records were
     deleted."""
     trackfiles = get_album_trackfiles(base_url, api_key, album_id)
-    return _delete_genuinely_stale_trackfiles(base_url, api_key, trackfiles, local_root, lidarr_root)
+    return _delete_genuinely_stale_trackfiles(base_url, api_key, trackfiles, local_root, lidarr_root, on_progress)
 
 
 def clear_stale_trackfiles_for_artist(
-    base_url: str, api_key: str, artist_id: int, local_root: str = "", lidarr_root: str = ""
+    base_url: str, api_key: str, artist_id: int, local_root: str = "", lidarr_root: str = "",
+    on_progress: OnProgress = None,
 ) -> int:
     """Like clear_stale_trackfiles, but across every album of an artist.
 
@@ -519,7 +535,7 @@ def clear_stale_trackfiles_for_artist(
     to it after the fact. Returns how many genuinely stale records were
     deleted."""
     trackfiles = get_artist_trackfiles(base_url, api_key, artist_id)
-    return _delete_genuinely_stale_trackfiles(base_url, api_key, trackfiles, local_root, lidarr_root)
+    return _delete_genuinely_stale_trackfiles(base_url, api_key, trackfiles, local_root, lidarr_root, on_progress)
 
 
 def wait_for_command(
@@ -528,6 +544,7 @@ def wait_for_command(
     command_id: int,
     timeout: float = COMMAND_POLL_TIMEOUT,
     queue_timeout: float = COMMAND_QUEUE_TIMEOUT,
+    on_progress: OnProgress = None,
 ) -> dict[str, Any]:
     """Poll a queued command until Lidarr reports it finished, returning
     the final command status payload.
@@ -541,6 +558,7 @@ def wait_for_command(
     starts counting fresh once Lidarr reports "started"."""
     queue_deadline = time.monotonic() + queue_timeout
     started_deadline: float | None = None
+    last_status: str | None = None
     url = _url(base_url, f"/api/v1/command/{command_id}")
     while True:
         try:
@@ -550,6 +568,9 @@ def wait_for_command(
             raise LidarrError(f"Failed to poll the Lidarr import's status: {exc}") from exc
         data = response.json()
         status = data.get("status")
+        if status != last_status:
+            _report(on_progress, f"Lidarr command {command_id}: {status}")
+            last_status = status
         if status in ("completed", "failed"):
             return data
         now = time.monotonic()
@@ -573,6 +594,7 @@ def import_folder(
     import_mode: str = "auto",
     local_root: str = "",
     lidarr_root: str = "",
+    on_progress: OnProgress = None,
 ) -> tuple[int, int, list[str]]:
     """Scan `folder` via Lidarr's manual-import endpoint and submit the
     candidates Lidarr fully auto-matched. For candidates Lidarr rejected
@@ -592,12 +614,18 @@ def import_folder(
     huge command, so importing e.g. a full discography at once doesn't
     hand Lidarr one enormous synchronous operation to process.
 
+    `on_progress`, if given, is called with a short human-readable message
+    at each step (artist resolution, stale-trackfile cleanup, each scan/
+    submit/poll against Lidarr's API) so a caller can surface what Lidarr
+    is doing in real time instead of going silent for the whole import.
+
     Returns (imported_count, skipped_count, skipped_file_descriptions),
     where each skipped description includes Lidarr's own rejection reason.
     Never raises for individual unmatched files - only for connectivity/API
     failures or a Lidarr-reported import failure (which stops further
     batches - already-imported batches stay imported)."""
     lidarr_folder = remap_path_to_lidarr(folder, local_root, lidarr_root)
+    _report(on_progress, f"Resolving artist for {lidarr_folder}...")
     # Resolving the artist by path up front means Lidarr never has to guess
     # it from the folder name - which it can't do at all when two library
     # artists share a name, and then gives up on parsing the whole folder.
@@ -607,30 +635,48 @@ def import_folder(
         # at all: even one file's stale record can crash the whole scan
         # (see clear_stale_trackfiles_for_artist), not just get politely
         # rejected, so waiting to react to a rejection is too late here.
-        clear_stale_trackfiles_for_artist(base_url, api_key, artist_id, local_root, lidarr_root)
+        _report(on_progress, "Checking for stale trackfile records...")
+        cleared = clear_stale_trackfiles_for_artist(
+            base_url, api_key, artist_id, local_root, lidarr_root, on_progress
+        )
+        if cleared:
+            _report(on_progress, f"Cleared {cleared} stale trackfile record(s)")
+    _report(on_progress, "Asking Lidarr to scan the folder for import candidates...")
     candidates = get_manual_import_candidates(base_url, api_key, lidarr_folder, artist_id)
+    _report(on_progress, f"Lidarr returned {len(candidates)} candidate file(s)")
 
     stale_album_ids = {c["album"]["id"] for c in candidates if has_existing_file_rejection(c)}
+    if stale_album_ids:
+        _report(
+            on_progress,
+            f"{len(stale_album_ids)} album(s) rejected as 'already has file' - clearing stale records...",
+        )
     for i, album_id in enumerate(stale_album_ids):
         if i:
             time.sleep(TRACKFILE_DELETE_PAUSE)
-        clear_stale_trackfiles(base_url, api_key, album_id, local_root, lidarr_root)
+        clear_stale_trackfiles(base_url, api_key, album_id, local_root, lidarr_root, on_progress)
     if stale_album_ids:
+        _report(on_progress, "Rescanning after clearing stale trackfiles...")
         candidates = get_manual_import_candidates(base_url, api_key, lidarr_folder, artist_id)
 
     matched = [c for c in candidates if is_fully_matched(c)]
     skipped = [c for c in candidates if not is_fully_matched(c)]
+    _report(on_progress, f"{len(matched)} file(s) fully matched, {len(skipped)} skipped")
 
     imported = 0
+    total_batches = -(-len(matched) // IMPORT_BATCH_SIZE)  # ceil division
     for i in range(0, len(matched), IMPORT_BATCH_SIZE):
         if i:
             time.sleep(IMPORT_BATCH_PAUSE)
         batch = matched[i : i + IMPORT_BATCH_SIZE]
+        batch_num = i // IMPORT_BATCH_SIZE + 1
+        _report(on_progress, f"Submitting batch {batch_num}/{total_batches} ({len(batch)} file(s)) to Lidarr...")
         command_id = submit_manual_import(base_url, api_key, batch, import_mode)
-        result = wait_for_command(base_url, api_key, command_id)
+        result = wait_for_command(base_url, api_key, command_id, on_progress=on_progress)
         if result.get("status") == "failed":
             raise LidarrError(f"Lidarr reported the import failed: {result.get('message', 'unknown error')}")
         imported += len(batch)
+        _report(on_progress, f"Batch {batch_num}/{total_batches} imported ({imported}/{len(matched)} total)")
 
     # Cached per album folder, since a whole skipped album's worth of
     # tracks would otherwise trigger the same diagnostic lookup repeatedly.
@@ -642,8 +688,10 @@ def import_folder(
         if artist_id is not None and has_missing_album_rejection(c):
             folder = path.parent.name
             if folder not in explained_by_folder:
+                _report(on_progress, f"Diagnosing why '{folder}' was skipped...")
                 explained_by_folder[folder] = explain_missing_album(base_url, api_key, artist_id, folder)
             reason = explained_by_folder[folder] or reason
         skipped_names.append(f"{path.name}: {reason}")
 
+    _report(on_progress, f"Done: {imported} imported, {len(skipped)} skipped")
     return imported, len(skipped), skipped_names

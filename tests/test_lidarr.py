@@ -230,6 +230,21 @@ def test_import_folder_clears_artist_stale_trackfiles_before_scanning_to_avoid_s
     assert deleted_ids == ["1"]
 
 
+def test_import_folder_reports_progress_as_it_happens() -> None:
+    # The caller (the GUI's Lidarr import log window) needs live feedback
+    # rather than total silence until the whole import finishes - so
+    # on_progress must fire at least once for each major step.
+    with patch("requests.get", return_value=_no_artist_match_response()):
+        messages: list[str] = []
+        lidarr.import_folder(
+            "http://localhost:8686", "key", Path("/music/Unmatched Artist"), on_progress=messages.append
+        )
+
+    assert any("Resolving artist" in m for m in messages)
+    assert any("scan the folder" in m for m in messages)
+    assert any(m.startswith("Done:") for m in messages)
+
+
 def test_get_manual_import_candidates_raises_clear_error_on_timeout() -> None:
     with patch("requests.get", side_effect=requests.Timeout("timed out")), patch("time.sleep"):
         with pytest.raises(lidarr.LidarrError, match="timed out"):
@@ -312,6 +327,19 @@ def test_wait_for_command_returns_once_completed() -> None:
 
     assert result == {"status": "completed"}
     assert sleep.called
+
+
+def test_wait_for_command_reports_progress_on_status_change_only() -> None:
+    responses = [Mock(), Mock(), Mock()]
+    responses[0].json.return_value = {"status": "queued"}
+    responses[1].json.return_value = {"status": "queued"}  # unchanged - must not report again
+    responses[2].json.return_value = {"status": "completed"}
+
+    messages: list[str] = []
+    with patch("requests.get", side_effect=responses), patch("time.sleep"):
+        lidarr.wait_for_command("http://localhost:8686", "key", 42, on_progress=messages.append)
+
+    assert messages == ["Lidarr command 42: queued", "Lidarr command 42: completed"]
 
 
 def test_wait_for_command_times_out(monkeypatch: pytest.MonkeyPatch) -> None:

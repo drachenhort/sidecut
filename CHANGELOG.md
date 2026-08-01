@@ -4,6 +4,27 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Auto-correct mismatched MBID** now also backfills a missing
+  `releasetype` tag (Album/EP/Single/Compilation/...) from AcoustID/
+  MusicBrainz - the tag the Collection Summary reads, so previously
+  untagged releases stop showing up as `Unknown`. Additive-only (never
+  overwrites an existing tag), works on both FLAC and already-converted
+  MP3, and - unlike the MBID rewrite - runs during both check-only buttons
+  too, so an already-converted MP3 library can be backfilled without
+  reconverting it. Picking the right release type required a second
+  AcoustID lookup (the API only honors one `meta` mode per request) and
+  matching against the file's own tagged album name, since blindly
+  preferring a "Compilation" release group mislabeled most well-known
+  songs (they almost always have one, even when tagged from the original
+  studio album).
+- **Import to Lidarr** now opens a live "Lidarr import" log window that
+  streams every step as it happens - artist resolution, stale-trackfile
+  cleanup, each scanned/submitted batch, and Lidarr's own command status
+  (queued/started/completed) - instead of the UI going silent for the
+  whole import. `lidarr.import_folder()` and friends take an optional
+  `on_progress` callback for this.
+
 ### Changed
 - Renamed the program from flac2mp3 to AcoustID: `flac2mp3.py` is now
   `acoustid.py`, the window title and the `QSettings` org/app identifiers

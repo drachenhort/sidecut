@@ -96,6 +96,12 @@ In the window:
   confirm they're correct (host/port reachable, key accepted) before
   relying on them. Then click **Import to Lidarr** to hand the current
   folder to Lidarr, instead of using Lidarr's own import UI.
+- **Import to Lidarr** opens a "Lidarr import" log window that streams
+  every step live as it happens - resolving the artist, clearing stale
+  trackfile records, scanning for candidates, each submitted batch, and
+  Lidarr's own command status (queued/started/completed) - so a multi-album
+  import never looks like it's just hanging. The window stays open after
+  the import finishes (or fails) so you can scroll back through it.
 - Tick **Auto-import to Lidarr after conversion** to skip that manual
   click: whenever **Start** finishes converting at least one file, the
   same import runs automatically right after. Off by default. It only
