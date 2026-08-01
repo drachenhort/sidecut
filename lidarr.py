@@ -150,15 +150,35 @@ def _queue_command(base_url: str, api_key: str, payload: dict[str, Any]) -> int:
     return response.json()["id"]
 
 
+def _to_import_file(item: dict[str, Any]) -> dict[str, Any]:
+    """Convert a raw GET /api/v1/manualimport candidate - which nests
+    artist/album/tracks as full objects, for display - into the flat shape
+    POST /api/v1/command's ManualImport actually expects (artistId/albumId/
+    trackIds as bare ids). Forwarding the raw GET item as-is silently sends
+    artistId=0/albumId=0 and the command never progresses past "queued"."""
+    return {
+        "path": item["path"],
+        "artistId": item["artist"]["id"],
+        "albumId": item["album"]["id"],
+        "albumReleaseId": item["albumReleaseId"],
+        "trackIds": [t["id"] for t in item["tracks"]],
+        "quality": item["quality"],
+        "indexerFlags": item.get("indexerFlags", 0),
+        "disableReleaseSwitching": item.get("disableReleaseSwitching", False),
+    }
+
+
 def submit_manual_import(
     base_url: str, api_key: str, items: list[dict[str, Any]], import_mode: str = "auto"
 ) -> int:
     """Queue a ManualImport command for the given (already-matched)
-    candidates. Returns the queued command's id for wait_for_command."""
+    manual-import candidates, as returned by get_manual_import_candidates.
+    Returns the queued command's id for wait_for_command."""
+    files = [_to_import_file(item) for item in items]
     return _queue_command(
         base_url,
         api_key,
-        {"name": "ManualImport", "files": items, "importMode": import_mode, "replaceExistingFiles": False},
+        {"name": "ManualImport", "files": files, "importMode": import_mode, "replaceExistingFiles": False},
     )
 
 

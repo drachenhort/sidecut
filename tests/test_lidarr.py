@@ -7,6 +7,18 @@ import requests
 import lidarr
 
 
+def _matched_candidate(path: str, artist_id: int = 1, album_id: int = 2, track_id: int = 3) -> dict:
+    return {
+        "path": path,
+        "artist": {"id": artist_id},
+        "album": {"id": album_id},
+        "albumReleaseId": 99,
+        "tracks": [{"id": track_id}],
+        "quality": {"quality": {"id": 4, "name": "MP3-320"}},
+        "rejections": [],
+    }
+
+
 def test_check_connection_returns_version() -> None:
     response = Mock(status_code=200)
     response.json.return_value = {"version": "1.2.3"}
@@ -73,14 +85,40 @@ def test_submit_manual_import_posts_command_and_returns_id() -> None:
     response.json.return_value = {"id": 42}
 
     with patch("requests.post", return_value=response) as post:
-        command_id = lidarr.submit_manual_import("http://localhost:8686", "key", [{"path": "a"}])
+        command_id = lidarr.submit_manual_import("http://localhost:8686", "key", [_matched_candidate("/music/a.mp3")])
 
     assert command_id == 42
     payload = post.call_args.kwargs["json"]
     assert payload["name"] == "ManualImport"
-    assert payload["files"] == [{"path": "a"}]
     assert payload["importMode"] == "auto"
     assert payload["replaceExistingFiles"] is False
+
+
+def test_submit_manual_import_flattens_nested_ids_for_the_command() -> None:
+    # GET /api/v1/manualimport nests artist/album/tracks as full objects;
+    # POST /api/v1/command's ManualImport needs flat artistId/albumId/
+    # trackIds - sending the raw GET shape silently sends artistId=0/
+    # albumId=0 and the command gets stuck at "queued" forever.
+    response = Mock()
+    response.json.return_value = {"id": 42}
+    candidate = _matched_candidate("/music/a.mp3", artist_id=855, album_id=10098, track_id=811503)
+
+    with patch("requests.post", return_value=response) as post:
+        lidarr.submit_manual_import("http://localhost:8686", "key", [candidate])
+
+    files = post.call_args.kwargs["json"]["files"]
+    assert files == [
+        {
+            "path": "/music/a.mp3",
+            "artistId": 855,
+            "albumId": 10098,
+            "albumReleaseId": 99,
+            "trackIds": [811503],
+            "quality": {"quality": {"id": 4, "name": "MP3-320"}},
+            "indexerFlags": 0,
+            "disableReleaseSwitching": False,
+        }
+    ]
 
 
 def test_wait_for_command_returns_once_completed() -> None:
@@ -171,7 +209,7 @@ def test_import_folder_remaps_folder_to_lidarrs_path_before_scanning() -> None:
 
 def test_import_folder_only_submits_matched_candidates() -> None:
     candidates = [
-        {"path": "/music/a.mp3", "artist": {"id": 1}, "album": {"id": 2}, "tracks": [{"id": 3}], "rejections": []},
+        _matched_candidate("/music/a.mp3"),
         {
             "path": "/music/b.mp3",
             "artist": None,
@@ -197,7 +235,18 @@ def test_import_folder_only_submits_matched_candidates() -> None:
     assert skipped == 1
     assert skipped_names == ["b.mp3: no match"]
     import_payload = post.call_args.kwargs["json"]
-    assert len(import_payload["files"]) == 1
+    assert import_payload["files"] == [
+        {
+            "path": "/music/a.mp3",
+            "artistId": 1,
+            "albumId": 2,
+            "albumReleaseId": 99,
+            "trackIds": [3],
+            "quality": {"quality": {"id": 4, "name": "MP3-320"}},
+            "indexerFlags": 0,
+            "disableReleaseSwitching": False,
+        }
+    ]
 
 
 def test_import_folder_skips_submit_when_nothing_matched() -> None:
@@ -228,9 +277,7 @@ def test_import_folder_clears_stale_trackfile_and_retries() -> None:
         },
     ]
     # After clearing the stale record, the retry scan matches cleanly.
-    second_scan = [
-        {"path": "/music/a.mp3", "artist": {"id": 1}, "album": {"id": 5}, "tracks": [{"id": 3}], "rejections": []},
-    ]
+    second_scan = [_matched_candidate("/music/a.mp3", album_id=5)]
     first_scan_response = Mock()
     first_scan_response.json.return_value = first_scan
     trackfiles_response = Mock()
@@ -259,9 +306,7 @@ def test_import_folder_clears_stale_trackfile_and_retries() -> None:
 
 
 def test_import_folder_raises_on_lidarr_reported_failure() -> None:
-    candidates = [
-        {"path": "/music/a.mp3", "artist": {"id": 1}, "album": {"id": 2}, "tracks": [{"id": 3}], "rejections": []},
-    ]
+    candidates = [_matched_candidate("/music/a.mp3")]
     candidates_response = Mock()
     candidates_response.json.return_value = candidates
     import_wait_response = Mock()

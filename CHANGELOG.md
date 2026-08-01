@@ -11,6 +11,16 @@ All notable changes to this project are documented in this file.
   "flac2mp3" identifier are not carried over), and the conversion log
   prefix changed from `flac2mp3-` to `acoustid-convert-`.
 
+### Fixed
+- `submit_manual_import()` was forwarding Lidarr's raw manual-import scan
+  result (which nests `artist`/`album`/`tracks` as full objects, for
+  display) straight into the `POST /api/v1/command` ManualImport payload.
+  That endpoint actually expects flat `artistId`/`albumId`/`trackIds`
+  fields, so every import was silently submitted with `artistId: 0,
+  albumId: 0` and the command never progressed past "queued". Found by
+  testing against a real Lidarr instance. `lidarr.py` now builds the
+  correct flat payload from each matched candidate.
+
 ### Added
 - New **Local path to library**/**Same path inside Lidarr** fields in
   Lidarr Settings...: when this app sees the library at a different
