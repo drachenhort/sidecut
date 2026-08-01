@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.4]
+
+### Added
+- Regression tests for the 0.3 fixes: a source file disappearing
+  mid-batch, and a FLAC tagged with both `date` and `year`.
+
 ## [0.3]
 
 ### Fixed
