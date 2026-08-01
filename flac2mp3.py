@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 
 import core
 
-__version__ = "0.2"
+__version__ = "0.3"
 
 STATUS_COLUMN_LABELS = {"pending": "Pending", "running": "Converting...", "ok": "Done", "fail": "Failed"}
 

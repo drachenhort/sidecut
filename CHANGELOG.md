@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.3]
+
+### Fixed
+- An unexpected error during a single file's conversion (e.g. the source
+  file disappearing mid-batch) could crash the worker thread unhandled,
+  leaving the UI stuck with Start/Cancel both disabled and no error
+  shown. Such failures are now caught and reported like any other
+  conversion failure, and the batch continues.
+- FLAC files tagged with both `date` and `year` had one silently
+  overwrite the other in the MP3's `TDRC` frame. `year` is no longer
+  mapped onto `TDRC` and is preserved as its own `TXXX` frame instead.
+
 ## [0.2]
 
 ### Changed
