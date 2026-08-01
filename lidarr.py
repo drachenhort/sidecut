@@ -15,6 +15,7 @@ with those matches queues the actual import.
 
 from __future__ import annotations
 
+import contextlib
 import time
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ import requests
 REQUEST_TIMEOUT = 30.0
 COMMAND_POLL_INTERVAL = 1.0
 COMMAND_POLL_TIMEOUT = 300.0
+RESCAN_POLL_TIMEOUT = 600.0
 
 
 class LidarrError(Exception):
@@ -82,20 +84,50 @@ def is_fully_matched(item: dict[str, Any]) -> bool:
     )
 
 
-def submit_manual_import(
-    base_url: str, api_key: str, items: list[dict[str, Any]], import_mode: str = "move"
-) -> int:
-    """Queue a ManualImport command for the given (already-matched)
-    candidates. Returns the queued command's id for wait_for_command."""
-    payload = {"name": "ManualImport", "files": items, "importMode": import_mode}
+def skip_reason(item: dict[str, Any]) -> str:
+    """Human-readable reason a candidate wasn't submitted - surfaces
+    Lidarr's own rejection text (e.g. "Track already has file") instead of
+    just silently listing the filename, since that's usually exactly what
+    explains a surprising "0 imported" result: Lidarr's database hasn't
+    caught up with a file this tool deleted/replaced outside of Lidarr."""
+    reasons = [r.get("reason", str(r)) if isinstance(r, dict) else str(r) for r in item.get("rejections") or []]
+    if reasons:
+        return "; ".join(reasons)
+    if not item.get("artist"):
+        return "no artist match"
+    if not item.get("album"):
+        return "no album match"
+    if not item.get("tracks"):
+        return "no track match"
+    return "unmatched"
+
+
+def _queue_command(base_url: str, api_key: str, payload: dict[str, Any]) -> int:
     try:
         response = requests.post(
             _url(base_url, "/api/v1/command"), headers=_headers(api_key), json=payload, timeout=REQUEST_TIMEOUT
         )
         response.raise_for_status()
     except requests.RequestException as exc:
-        raise LidarrError(f"Failed to queue the Lidarr import: {exc}") from exc
+        raise LidarrError(f"Failed to queue the '{payload.get('name')}' command: {exc}") from exc
     return response.json()["id"]
+
+
+def submit_manual_import(
+    base_url: str, api_key: str, items: list[dict[str, Any]], import_mode: str = "move"
+) -> int:
+    """Queue a ManualImport command for the given (already-matched)
+    candidates. Returns the queued command's id for wait_for_command."""
+    return _queue_command(
+        base_url, api_key, {"name": "ManualImport", "files": items, "importMode": import_mode}
+    )
+
+
+def trigger_rescan(base_url: str, api_key: str) -> int:
+    """Queue a library rescan so Lidarr's database catches up with files
+    this tool changed on disk outside of Lidarr (e.g. a FLAC it deleted
+    after converting it to MP3). Returns the queued command's id."""
+    return _queue_command(base_url, api_key, {"name": "RescanFolders"})
 
 
 def wait_for_command(
@@ -120,11 +152,18 @@ def wait_for_command(
 
 
 def import_folder(base_url: str, api_key: str, folder: Path, import_mode: str = "move") -> tuple[int, int, list[str]]:
-    """Scan `folder` via Lidarr's manual-import endpoint, submit only the
-    candidates Lidarr fully auto-matched, and wait for the import to finish.
-    Returns (imported_count, skipped_count, skipped_file_names). Never
-    raises for individual unmatched files - only for connectivity/API
+    """Rescan the library (best-effort, so Lidarr's database reflects files
+    this tool just converted/deleted rather than rejecting matches against
+    stale trackfile records), then scan `folder` via Lidarr's manual-import
+    endpoint and submit only the candidates Lidarr fully auto-matched.
+    Returns (imported_count, skipped_count, skipped_file_descriptions),
+    where each skipped description includes Lidarr's own rejection reason.
+    Never raises for individual unmatched files - only for connectivity/API
     failures or a Lidarr-reported import failure."""
+    with contextlib.suppress(LidarrError):
+        rescan_id = trigger_rescan(base_url, api_key)
+        wait_for_command(base_url, api_key, rescan_id, timeout=RESCAN_POLL_TIMEOUT)
+
     candidates = get_manual_import_candidates(base_url, api_key, folder)
     matched = [c for c in candidates if is_fully_matched(c)]
     skipped = [c for c in candidates if not is_fully_matched(c)]
@@ -135,5 +174,5 @@ def import_folder(base_url: str, api_key: str, folder: Path, import_mode: str = 
         if result.get("status") == "failed":
             raise LidarrError(f"Lidarr reported the import failed: {result.get('message', 'unknown error')}")
 
-    skipped_names = [Path(c.get("path", "?")).name for c in skipped]
+    skipped_names = [f"{Path(c.get('path', '?')).name}: {skip_reason(c)}" for c in skipped]
     return len(matched), len(skipped), skipped_names

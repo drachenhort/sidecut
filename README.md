@@ -72,22 +72,31 @@ In the window:
 
 ## Lidarr import (optional)
 
-- Entirely separate feature, off by default: enter your Lidarr **URL**
-  (e.g. `http://localhost:8686`) and **API key** (Lidarr's Settings >
-  General) and click **Import to Lidarr** to hand the current folder to
-  Lidarr, instead of using Lidarr's own import UI.
+- Entirely separate feature, off by default. Click **Lidarr Settings...**
+  to enter your Lidarr **URL** (e.g. `http://localhost:8686`) and **API
+  key** (Lidarr's Settings > General) and use **Test Connection** to
+  confirm they're correct (host/port reachable, key accepted) before
+  relying on them. Then click **Import to Lidarr** to hand the current
+  folder to Lidarr, instead of using Lidarr's own import UI.
 - This does **not** write to Lidarr's database directly - that's an
   unsupported, version-fragile approach that can race with Lidarr's own
   in-memory state. Instead it drives Lidarr's **Manual Import API**: the
   same matching logic behind Lidarr's Manual Import screen, just called
   as an HTTP command instead of clicked through by hand.
+- Before scanning, it also (best-effort) asks Lidarr to rescan its
+  library, so Lidarr's database catches up with files this tool changed
+  on disk (e.g. a FLAC it just converted and deleted) instead of
+  rejecting matches against stale records for a file that no longer
+  exists. If your Lidarr version doesn't support that rescan command,
+  this step is silently skipped rather than blocking the import.
 - Lidarr reads the files' own embedded tags to propose matches. Since
   this tool preserves full MusicBrainz/AcoustID tags through conversion,
   well-tagged files are usually auto-matched with no input needed.
 - Only files Lidarr fully auto-matches (artist, album, and track, with no
   unresolved rejections) are submitted for import; anything it can't
-  match is left completely alone and listed in the result so you can
-  still import it by hand in Lidarr if needed.
+  match is left completely alone, and the result lists each skipped file
+  together with Lidarr's own reason (e.g. "already has file") so a
+  surprising "0 imported" is easy to diagnose instead of a dead end.
 - Runs in the background and is independent of everything else in the
   window - it doesn't require or interact with Start, Check AcoustID, or
   the file table, and can be used on its own at any time a folder is

@@ -90,59 +90,129 @@ def test_wait_for_command_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
             lidarr.wait_for_command("http://localhost:8686", "key", 42, timeout=1.0)
 
 
+def test_skip_reason_prefers_lidarr_rejection_text() -> None:
+    item = {"artist": None, "album": None, "tracks": [], "rejections": [{"reason": "Track already has file"}]}
+    assert lidarr.skip_reason(item) == "Track already has file"
+
+
+def test_skip_reason_falls_back_to_which_field_is_missing() -> None:
+    assert lidarr.skip_reason({"artist": None, "album": None, "tracks": []}) == "no artist match"
+    assert lidarr.skip_reason({"artist": {"id": 1}, "album": None, "tracks": []}) == "no album match"
+    assert lidarr.skip_reason({"artist": {"id": 1}, "album": {"id": 2}, "tracks": []}) == "no track match"
+
+
+def test_trigger_rescan_posts_rescan_command() -> None:
+    response = Mock()
+    response.json.return_value = {"id": 7}
+
+    with patch("requests.post", return_value=response) as post:
+        command_id = lidarr.trigger_rescan("http://localhost:8686", "key")
+
+    assert command_id == 7
+    assert post.call_args.kwargs["json"] == {"name": "RescanFolders"}
+
+
 def test_import_folder_only_submits_matched_candidates() -> None:
     candidates = [
         {"path": "/music/a.mp3", "artist": {"id": 1}, "album": {"id": 2}, "tracks": [{"id": 3}], "rejections": []},
-        {"path": "/music/b.mp3", "artist": None, "album": None, "tracks": [], "rejections": ["no match"]},
+        {
+            "path": "/music/b.mp3",
+            "artist": None,
+            "album": None,
+            "tracks": [],
+            "rejections": [{"reason": "Track already has file"}],
+        },
     ]
-    get_response = Mock()
-    get_response.json.return_value = candidates
-    post_response = Mock()
-    post_response.json.return_value = {"id": 1}
-    command_response = Mock()
-    command_response.json.return_value = {"status": "completed"}
+    rescan_wait_response = Mock()
+    rescan_wait_response.json.return_value = {"status": "completed"}
+    candidates_response = Mock()
+    candidates_response.json.return_value = candidates
+    import_wait_response = Mock()
+    import_wait_response.json.return_value = {"status": "completed"}
+    rescan_post_response = Mock()
+    rescan_post_response.json.return_value = {"id": 1}
+    import_post_response = Mock()
+    import_post_response.json.return_value = {"id": 2}
 
     with (
-        patch("requests.get", side_effect=[get_response, command_response]),
-        patch("requests.post", return_value=post_response) as post,
+        patch("requests.get", side_effect=[rescan_wait_response, candidates_response, import_wait_response]),
+        patch("requests.post", side_effect=[rescan_post_response, import_post_response]) as post,
     ):
         imported, skipped, skipped_names = lidarr.import_folder("http://localhost:8686", "key", Path("/music"))
 
     assert imported == 1
     assert skipped == 1
-    assert skipped_names == ["b.mp3"]
-    assert len(post.call_args.kwargs["json"]["files"]) == 1
+    assert skipped_names == ["b.mp3: Track already has file"]
+    import_payload = post.call_args_list[1].kwargs["json"]
+    assert len(import_payload["files"]) == 1
 
 
 def test_import_folder_skips_submit_when_nothing_matched() -> None:
-    get_response = Mock()
-    get_response.json.return_value = [
+    rescan_wait_response = Mock()
+    rescan_wait_response.json.return_value = {"status": "completed"}
+    candidates_response = Mock()
+    candidates_response.json.return_value = [
         {"path": "/music/b.mp3", "artist": None, "album": None, "tracks": [], "rejections": ["no match"]},
     ]
+    rescan_post_response = Mock()
+    rescan_post_response.json.return_value = {"id": 1}
 
-    with patch("requests.get", return_value=get_response), patch("requests.post") as post:
+    with (
+        patch("requests.get", side_effect=[rescan_wait_response, candidates_response]),
+        patch("requests.post", return_value=rescan_post_response) as post,
+    ):
         imported, skipped, skipped_names = lidarr.import_folder("http://localhost:8686", "key", Path("/music"))
 
     assert imported == 0
     assert skipped == 1
-    assert skipped_names == ["b.mp3"]
-    post.assert_not_called()
+    assert skipped_names == ["b.mp3: no match"]
+    post.assert_called_once()  # only the rescan trigger, no ManualImport submitted
 
 
 def test_import_folder_raises_on_lidarr_reported_failure() -> None:
     candidates = [
         {"path": "/music/a.mp3", "artist": {"id": 1}, "album": {"id": 2}, "tracks": [{"id": 3}], "rejections": []},
     ]
-    get_response = Mock()
-    get_response.json.return_value = candidates
-    post_response = Mock()
-    post_response.json.return_value = {"id": 1}
-    command_response = Mock()
-    command_response.json.return_value = {"status": "failed", "message": "disk full"}
+    rescan_wait_response = Mock()
+    rescan_wait_response.json.return_value = {"status": "completed"}
+    candidates_response = Mock()
+    candidates_response.json.return_value = candidates
+    import_wait_response = Mock()
+    import_wait_response.json.return_value = {"status": "failed", "message": "disk full"}
+    rescan_post_response = Mock()
+    rescan_post_response.json.return_value = {"id": 1}
+    import_post_response = Mock()
+    import_post_response.json.return_value = {"id": 2}
 
     with (
-        patch("requests.get", side_effect=[get_response, command_response]),
-        patch("requests.post", return_value=post_response),
+        patch("requests.get", side_effect=[rescan_wait_response, candidates_response, import_wait_response]),
+        patch("requests.post", side_effect=[rescan_post_response, import_post_response]),
     ):
         with pytest.raises(lidarr.LidarrError, match="disk full"):
             lidarr.import_folder("http://localhost:8686", "key", Path("/music"))
+
+
+def test_import_folder_proceeds_when_rescan_trigger_fails() -> None:
+    # The pre-import rescan is best-effort: if Lidarr rejects/doesn't
+    # support it, the import itself must still go ahead rather than failing.
+    candidates = [
+        {"path": "/music/a.mp3", "artist": {"id": 1}, "album": {"id": 2}, "tracks": [{"id": 3}], "rejections": []},
+    ]
+    candidates_response = Mock()
+    candidates_response.json.return_value = candidates
+    import_wait_response = Mock()
+    import_wait_response.json.return_value = {"status": "completed"}
+    import_post_response = Mock()
+    import_post_response.json.return_value = {"id": 2}
+
+    with (
+        patch("requests.get", side_effect=[candidates_response, import_wait_response]),
+        patch(
+            "requests.post",
+            side_effect=[requests.ConnectionError("unknown command"), import_post_response],
+        ),
+    ):
+        imported, skipped, skipped_names = lidarr.import_folder("http://localhost:8686", "key", Path("/music"))
+
+    assert imported == 1
+    assert skipped == 0

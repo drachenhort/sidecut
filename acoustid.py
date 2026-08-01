@@ -18,7 +18,10 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
+    QFormLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -176,6 +179,90 @@ class LidarrImportWorker(QThread):
         self.import_finished.emit(imported, skipped, "; ".join(skipped_names))
 
 
+class LidarrConnectionTestWorker(QThread):
+    """Runs lidarr.check_connection() off the UI thread, since it's a
+    network round-trip that could hang if the URL is unreachable."""
+
+    test_finished = Signal(str)  # Lidarr's version string
+    test_error = Signal(str)
+
+    def __init__(self, base_url: str, api_key: str) -> None:
+        super().__init__()
+        self.base_url = base_url
+        self.api_key = api_key
+
+    def run(self) -> None:
+        try:
+            version = lidarr.check_connection(self.base_url, self.api_key)
+        except lidarr.LidarrError as exc:
+            self.test_error.emit(str(exc))
+            return
+        self.test_finished.emit(version)
+
+
+class LidarrSettingsDialog(QDialog):
+    """Modal dialog for the Lidarr URL/API key, with a Test Connection
+    button so mistakes (wrong host/port, bad key) show up here instead of
+    only surfacing later as a confusing Import to Lidarr failure."""
+
+    def __init__(self, settings: QSettings, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Lidarr Settings")
+        self.settings = settings
+        self.test_worker: LidarrConnectionTestWorker | None = None
+
+        layout = QVBoxLayout(self)
+
+        form = QFormLayout()
+        self.url_edit = QLineEdit(self.settings.value("lidarr_url", ""))
+        self.url_edit.setPlaceholderText("http://localhost:8686")
+        self.key_edit = QLineEdit(self.settings.value("lidarr_api_key", ""))
+        self.key_edit.setPlaceholderText("API key (Lidarr: Settings > General)")
+        form.addRow("URL:", self.url_edit)
+        form.addRow("API key:", self.key_edit)
+        layout.addLayout(form)
+
+        test_row = QHBoxLayout()
+        self.test_button = QPushButton("Test Connection")
+        self.test_button.clicked.connect(self._test_connection)
+        self.test_status_label = QLabel("")
+        test_row.addWidget(self.test_button)
+        test_row.addWidget(self.test_status_label, stretch=1)
+        layout.addLayout(test_row)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _test_connection(self) -> None:
+        url = self.url_edit.text().strip()
+        api_key = self.key_edit.text().strip()
+        if not url or not api_key:
+            QMessageBox.critical(self, "Lidarr Settings", "Enter both a URL and an API key first.")
+            return
+        self.test_button.setEnabled(False)
+        self.test_status_label.setText("Testing...")
+        self.test_worker = LidarrConnectionTestWorker(url, api_key)
+        self.test_worker.test_finished.connect(self._on_test_finished)
+        self.test_worker.test_error.connect(self._on_test_error)
+        self.test_worker.start()
+
+    def _on_test_finished(self, version: str) -> None:
+        self.test_button.setEnabled(True)
+        self.test_status_label.setText(f"Connected — Lidarr v{version}")
+
+    def _on_test_error(self, message: str) -> None:
+        self.test_button.setEnabled(True)
+        self.test_status_label.setText("")
+        QMessageBox.critical(self, "Lidarr Settings", message)
+
+    def accept(self) -> None:
+        self.settings.setValue("lidarr_url", self.url_edit.text().strip())
+        self.settings.setValue("lidarr_api_key", self.key_edit.text().strip())
+        super().accept()
+
+
 class MainWindow(QMainWindow):
     def __init__(self, initial_folder: Path | None = None) -> None:
         super().__init__()
@@ -317,15 +404,8 @@ class MainWindow(QMainWindow):
     def _build_lidarr_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
 
-        self.lidarr_url_edit = QLineEdit()
-        self.lidarr_url_edit.setPlaceholderText("Lidarr URL (e.g. http://localhost:8686)")
-        self.lidarr_url_edit.setText(self.settings.value("lidarr_url", ""))
-        self.lidarr_url_edit.editingFinished.connect(self._save_lidarr_settings)
-
-        self.lidarr_key_edit = QLineEdit()
-        self.lidarr_key_edit.setPlaceholderText("Lidarr API key (Settings > General)")
-        self.lidarr_key_edit.setText(self.settings.value("lidarr_api_key", ""))
-        self.lidarr_key_edit.editingFinished.connect(self._save_lidarr_settings)
+        lidarr_settings_button = QPushButton("Lidarr Settings...")
+        lidarr_settings_button.clicked.connect(self._open_lidarr_settings)
 
         self.lidarr_import_button = QPushButton("Import to Lidarr")
         self.lidarr_import_button.setToolTip(
@@ -334,19 +414,19 @@ class MainWindow(QMainWindow):
             "Manual Import screen), so Lidarr matches, moves, and renames files itself\n"
             "instead of a direct database write. Only files Lidarr can fully auto-match\n"
             "(from embedded tags) are imported; anything it can't match is left alone and\n"
-            "reported back, not touched."
+            "reported back, not touched.\n"
+            "Configure the URL and API key via Lidarr Settings..."
         )
         self.lidarr_import_button.setEnabled(False)
         self.lidarr_import_button.clicked.connect(self._start_lidarr_import)
 
-        row.addWidget(self.lidarr_url_edit, stretch=1)
-        row.addWidget(self.lidarr_key_edit, stretch=1)
+        row.addStretch(1)
+        row.addWidget(lidarr_settings_button)
         row.addWidget(self.lidarr_import_button)
         return row
 
-    def _save_lidarr_settings(self) -> None:
-        self.settings.setValue("lidarr_url", self.lidarr_url_edit.text().strip())
-        self.settings.setValue("lidarr_api_key", self.lidarr_key_edit.text().strip())
+    def _open_lidarr_settings(self) -> None:
+        LidarrSettingsDialog(self.settings, self).exec()
 
     def _save_quality_setting(self) -> None:
         self.settings.setValue("quality", self.quality_combo.currentData())
@@ -428,10 +508,12 @@ class MainWindow(QMainWindow):
         self._run_batch(files, acoustid_apikey, acoustid_only=True, log_prefix="acoustid-check-mp3")
 
     def _start_lidarr_import(self) -> None:
-        base_url = self.lidarr_url_edit.text().strip()
-        api_key = self.lidarr_key_edit.text().strip()
+        base_url = self.settings.value("lidarr_url", "")
+        api_key = self.settings.value("lidarr_api_key", "")
         if not base_url or not api_key:
-            QMessageBox.critical(self, "AcoustID", "Importing to Lidarr needs both a URL and an API key.")
+            QMessageBox.critical(
+                self, "AcoustID", "Set the Lidarr URL and API key first, via Lidarr Settings..."
+            )
             return
 
         folder = Path(self.folder_edit.text())

@@ -16,9 +16,17 @@ All notable changes to this project are documented in this file.
   independent of everything else in the window): hands the current folder
   to Lidarr's own Manual Import API instead of writing to Lidarr's
   database directly or requiring its import UI. New `lidarr.py` module
-  wraps the API (scan a folder for matches, submit the fully-matched
-  ones, poll until the import command finishes); files Lidarr can't
-  auto-match from embedded tags are left untouched and reported back.
+  wraps the API (best-effort rescan so Lidarr's database catches up with
+  files this tool changed on disk, scan a folder for matches, submit the
+  fully-matched ones, poll until the import command finishes); files
+  Lidarr can't auto-match from embedded tags are left untouched and
+  reported back together with Lidarr's own rejection reason (e.g.
+  "already has file"), so a surprising "0 imported" is diagnosable
+  instead of a dead end.
+- New **Lidarr Settings...** dialog holding the Lidarr URL/API key (moved
+  out of the main window), with a **Test Connection** button that
+  verifies the host/port is reachable and the API key is accepted before
+  you rely on them for an import.
 - The last folder opened (via **Browse...** or on the command line) is
   now remembered between runs and reopened automatically on launch.
 - New **Check AcoustID (incl. MP3)** button: rescans the folder for both
