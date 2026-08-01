@@ -220,6 +220,10 @@ def find_flac_files(root: Path) -> list[Path]:
     return sorted(p for p in root.rglob("*") if p.is_file() and p.suffix.lower() == ".flac")
 
 
+def find_flac_and_mp3_files(root: Path) -> list[Path]:
+    return sorted(p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in (".flac", ".mp3"))
+
+
 def _fpcalc_fingerprint(path: Path) -> tuple[int, str]:
     """Run chromaprint's fpcalc and return (duration_seconds, fingerprint)."""
     proc = subprocess.run(
@@ -251,6 +255,33 @@ def _acoustid_lookup(api_key: str, duration: int, fingerprint: str) -> dict:
     except ValueError:
         response.raise_for_status()
         raise
+
+
+def _read_existing_recording(path: Path) -> tuple[str | None, str, str]:
+    """Read the existing MusicBrainz recording ID (if any) plus artist/title,
+    from either a FLAC (Vorbis comments) or an MP3 (ID3v2) file, so
+    check_acoustid can compare against whichever format it's given."""
+    existing_id: str | None = None
+    artist = ""
+    title = ""
+    suffix = path.suffix.lower()
+    if suffix == ".flac":
+        tags = FLAC(path)
+        values = tags.get(_RECORDING_ID_KEY)
+        if values:
+            existing_id = values[0]
+        artist = "; ".join(tags.get("artist", []))
+        title = "; ".join(tags.get("title", []))
+    elif suffix == ".mp3":
+        id3 = ID3(path)
+        ufid = id3.get(f"UFID:{_UFID_OWNER}")
+        if ufid is not None:
+            existing_id = ufid.data.decode("ascii", "ignore")
+        if "TPE1" in id3:
+            artist = "; ".join(id3["TPE1"].text)
+        if "TIT2" in id3:
+            title = "; ".join(id3["TIT2"].text)
+    return existing_id, artist, title
 
 
 def check_acoustid(path: Path, api_key: str) -> AcoustIDCheck:
@@ -290,12 +321,7 @@ def check_acoustid(path: Path, api_key: str) -> AcoustIDCheck:
     tagged_artist = ""
     tagged_title = ""
     with contextlib.suppress(Exception):
-        tags = FLAC(path)
-        values = tags.get(_RECORDING_ID_KEY)
-        if values:
-            existing_id = values[0]
-        tagged_artist = "; ".join(tags.get("artist", []))
-        tagged_title = "; ".join(tags.get("title", []))
+        existing_id, tagged_artist, tagged_title = _read_existing_recording(path)
 
     best_id = recording_ids[0] if recording_ids else None
     if existing_id:
@@ -326,7 +352,11 @@ def correct_acoustid_mismatch(path: Path, result: AcoustIDCheck, min_score: floa
     `result` as corrected (mutating it in place so callers logging/emitting
     `result` afterwards see the update). Returns whether it corrected
     anything. Only touches musicbrainz_trackid - artist/title/etc. are left
-    alone since AcoustID's formatting may not match the file's convention."""
+    alone since AcoustID's formatting may not match the file's convention.
+    Only ever touches FLACs: it's meant to run just before conversion, not
+    on already-converted MP3s."""
+    if path.suffix.lower() != ".flac":
+        return False
     if result.status != "mismatch" or not result.recording_id:
         return False
     if result.score is not None and result.score < min_score:

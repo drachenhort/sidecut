@@ -44,6 +44,17 @@ def test_find_flac_files_recursive_case_insensitive(tmp_path: Path) -> None:
     assert [p.name for p in found] == ["one.flac", "two.FLAC"]
 
 
+def test_find_flac_and_mp3_files_recursive_case_insensitive(tmp_path: Path) -> None:
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "one.flac").touch()
+    (tmp_path / "a" / "two.MP3").touch()
+    (tmp_path / "a" / "not_audio.txt").touch()
+
+    found = core.find_flac_and_mp3_files(tmp_path)
+
+    assert [p.name for p in found] == ["one.flac", "two.MP3"]
+
+
 def test_convert_one_preserves_standard_and_custom_tags(tmp_path: Path) -> None:
     src = tmp_path / "song.flac"
     make_flac(
@@ -300,6 +311,18 @@ def test_correct_acoustid_mismatch_skips_when_no_recording_id(tmp_path: Path) ->
     assert FLAC(src)[core._RECORDING_ID_KEY] == ["mb-track-1"]
 
 
+def test_correct_acoustid_mismatch_never_touches_mp3(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src, MUSICBRAINZ_TRACKID="mb-track-wrong")
+    with open("/dev/null", "w") as log:
+        assert core.convert_one(src, core.QUALITY_PRESETS["v0"], log).ok
+    mp3 = tmp_path / "song.mp3"
+    result = core.AcoustIDCheck("mismatch", "detail", recording_id="mb-track-correct", score=0.9)
+
+    assert core.correct_acoustid_mismatch(mp3, result) is False
+    assert result.corrected is False
+
+
 def test_check_acoustid_reports_identified_when_untagged(tmp_path: Path) -> None:
     src = tmp_path / "song.flac"
     make_flac(src)
@@ -314,6 +337,29 @@ def test_check_acoustid_reports_identified_when_untagged(tmp_path: Path) -> None
 
     assert result.status == "identified"
     assert result.recording_id == "mb-track-1"
+
+
+def test_check_acoustid_reads_existing_tags_from_mp3(tmp_path: Path) -> None:
+    # check_acoustid must work on already-converted MP3s (not just FLACs),
+    # reading the recording ID from the ID3 UFID frame Picard/this tool
+    # writes rather than a Vorbis comment.
+    src = tmp_path / "song.flac"
+    make_flac(src, artist="Artist", title="Song", MUSICBRAINZ_TRACKID="mb-track-123")
+    with open("/dev/null", "w") as log:
+        assert core.convert_one(src, core.QUALITY_PRESETS["v0"], log).ok
+    mp3 = tmp_path / "song.mp3"
+
+    response = Mock()
+    response.json.return_value = {
+        "status": "ok",
+        "results": [{"id": "acoustid-1", "score": 0.95, "recordings": [{"id": "mb-track-123", "title": "Song"}]}],
+    }
+
+    with patch("subprocess.run", side_effect=_fake_fpcalc_run), patch("requests.get", return_value=response):
+        result = core.check_acoustid(mp3, "fake-api-key")
+
+    assert result.status == "match"
+    assert result.recording_id == "mb-track-123"
 
 
 def test_check_acoustid_reports_no_match(tmp_path: Path) -> None:

@@ -56,11 +56,17 @@ In the window:
   AcoustID's suggested recording (only the ID — artist/title/etc. are left
   alone) before the file converts, but only when AcoustID's score is
   >= 0.5. Corrected rows show "Mismatch (fixed)". This never applies
-  during a **Check AcoustID Only** run, which always leaves files
-  untouched regardless of this checkbox.
+  during a **Check AcoustID Only** (or **+MP3**) run, which always leave
+  files untouched regardless of this checkbox.
 - Lookups are capped at 4 requests/second total, no matter how many
   parallel jobs are configured — workers block on a shared limiter rather
   than each hammering the API independently.
+- Everywhere else, only `.flac` files are scanned and shown — **except**
+  **Check AcoustID (incl. MP3)**, which rescans the folder for both
+  `.flac` and `.mp3` files and runs the check on all of them. This is
+  scoped strictly to that one button: it doesn't touch what Start or
+  Check AcoustID Only see, doesn't convert anything, and, like the
+  FLAC-only check, never auto-corrects.
 - The API key is saved between runs (Qt `QSettings`); get one for free at
   [acoustid.org](https://acoustid.org/).
 

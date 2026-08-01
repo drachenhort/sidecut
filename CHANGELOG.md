@@ -14,6 +14,13 @@ All notable changes to this project are documented in this file.
 ### Added
 - The last folder opened (via **Browse...** or on the command line) is
   now remembered between runs and reopened automatically on launch.
+- New **Check AcoustID (incl. MP3)** button: rescans the folder for both
+  `.flac` and `.mp3` files and runs the AcoustID check on all of them.
+  Scoped strictly to that button - Start and Check AcoustID Only still
+  only see `.flac` files, and this never converts or auto-corrects
+  anything. `check_acoustid()` now reads the existing recording ID from
+  either Vorbis comments (FLAC) or the ID3 UFID frame (MP3) so the
+  match/mismatch comparison works on both.
 - Optional **Auto-correct mismatched MBID** checkbox: when a Mismatch is
   found with a confident enough AcoustID score (>= 0.5), the FLAC's
   `musicbrainz_trackid` tag is rewritten to the correct recording before

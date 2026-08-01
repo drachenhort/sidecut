@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLayout,
     QLineEdit,
     QMainWindow,
     QMessageBox,
@@ -234,9 +235,10 @@ class MainWindow(QMainWindow):
         row.addWidget(self.cancel_button)
         return row
 
-    def _build_acoustid_row(self) -> QHBoxLayout:
-        row = QHBoxLayout()
+    def _build_acoustid_row(self) -> QLayout:
+        outer = QVBoxLayout()
 
+        config_row = QHBoxLayout()
         self.acoustid_checkbox = QCheckBox("Check AcoustID")
         self.acoustid_checkbox.setChecked(self.settings.value("acoustid_enabled", False, type=bool))
         self.acoustid_checkbox.toggled.connect(self._save_acoustid_settings)
@@ -251,20 +253,35 @@ class MainWindow(QMainWindow):
             "When Check AcoustID finds a mismatch with a confident enough score "
             f"(>= {core.ACOUSTID_AUTOCORRECT_MIN_SCORE:.1f}), rewrite the FLAC's "
             "musicbrainz_trackid tag to AcoustID's suggested recording before converting.\n"
-            "Never applies during a Check AcoustID Only run - that always leaves files untouched."
+            "Never applies during a Check AcoustID Only (or +MP3) run - those always leave files untouched."
         )
         self.acoustid_autocorrect_checkbox.setChecked(self.settings.value("acoustid_autocorrect", False, type=bool))
         self.acoustid_autocorrect_checkbox.toggled.connect(self._save_acoustid_settings)
 
+        config_row.addWidget(self.acoustid_checkbox)
+        config_row.addWidget(self.acoustid_key_edit, stretch=1)
+        config_row.addWidget(self.acoustid_autocorrect_checkbox)
+        outer.addLayout(config_row)
+
+        actions_row = QHBoxLayout()
         self.checkonly_button = QPushButton("Check AcoustID Only")
         self.checkonly_button.setEnabled(False)
         self.checkonly_button.clicked.connect(self._start_acoustid_check_only)
 
-        row.addWidget(self.acoustid_checkbox)
-        row.addWidget(self.acoustid_key_edit, stretch=1)
-        row.addWidget(self.acoustid_autocorrect_checkbox)
-        row.addWidget(self.checkonly_button)
-        return row
+        self.checkonly_mp3_button = QPushButton("Check AcoustID (incl. MP3)")
+        self.checkonly_mp3_button.setToolTip(
+            "Scans this folder for both .flac and .mp3 files and runs the AcoustID check on\n"
+            "all of them. Only affects this button: Start and Check AcoustID Only still only\n"
+            "see .flac files. Files are never converted or modified by this."
+        )
+        self.checkonly_mp3_button.setEnabled(False)
+        self.checkonly_mp3_button.clicked.connect(self._start_mp3_acoustid_check)
+
+        actions_row.addStretch(1)
+        actions_row.addWidget(self.checkonly_button)
+        actions_row.addWidget(self.checkonly_mp3_button)
+        outer.addLayout(actions_row)
+        return outer
 
     def _save_acoustid_settings(self) -> None:
         self.settings.setValue("acoustid_enabled", self.acoustid_checkbox.isChecked())
@@ -290,24 +307,25 @@ class MainWindow(QMainWindow):
         self.folder_edit.setText(str(folder))
         self.settings.setValue("last_folder", str(folder))
         self.files = core.find_flac_files(folder)
-        self._populate_table()
+        self._populate_table(self.files)
         self.start_button.setEnabled(bool(self.files))
         self.checkonly_button.setEnabled(bool(self.files))
+        self.checkonly_mp3_button.setEnabled(True)
         if self.files:
             self.status_label.setText(f"{len(self.files)} FLAC file(s) found under {folder}")
         else:
             self.status_label.setText(f"No .flac files found under {folder}")
 
-    def _populate_table(self) -> None:
-        self.table.setRowCount(len(self.files))
-        for row, path in enumerate(self.files):
+    def _populate_table(self, files: list[Path]) -> None:
+        self.table.setRowCount(len(files))
+        for row, path in enumerate(files):
             self.table.setItem(row, 0, QTableWidgetItem(path.name))
             self.table.setItem(row, 1, QTableWidgetItem(STATUS_COLUMN_LABELS["pending"]))
             bar = QProgressBar()
             bar.setRange(0, 100)
             self.table.setCellWidget(row, 2, bar)
             self.table.setItem(row, 3, QTableWidgetItem("-"))
-        self.overall_bar.setRange(0, max(1, len(self.files)))
+        self.overall_bar.setRange(0, max(1, len(files)))
         self.overall_bar.setValue(0)
 
     def _require_acoustid_apikey(self) -> str | None:
@@ -326,29 +344,46 @@ class MainWindow(QMainWindow):
             acoustid_apikey = self._require_acoustid_apikey()
             if acoustid_apikey is None:
                 return
-        self._run_batch(acoustid_apikey, acoustid_only=False)
+        self._run_batch(self.files, acoustid_apikey, acoustid_only=False, log_prefix="acoustid-convert")
 
     def _start_acoustid_check_only(self) -> None:
         acoustid_apikey = self._require_acoustid_apikey()
         if acoustid_apikey is None:
             return
-        self._run_batch(acoustid_apikey, acoustid_only=True)
+        self._run_batch(self.files, acoustid_apikey, acoustid_only=True, log_prefix="acoustid-check")
 
-    def _run_batch(self, acoustid_apikey: str | None, acoustid_only: bool) -> None:
+    def _start_mp3_acoustid_check(self) -> None:
+        acoustid_apikey = self._require_acoustid_apikey()
+        if acoustid_apikey is None:
+            return
+        folder = Path(self.folder_edit.text())
+        files = core.find_flac_and_mp3_files(folder)
+        if not files:
+            QMessageBox.information(self, "AcoustID", f"No .flac or .mp3 files found under {folder}")
+            return
+        # Deliberately not stored on self.files: this scan (and its table
+        # listing) is scoped to this button only, so Start and Check
+        # AcoustID Only keep targeting the folder's FLAC files afterwards.
+        self._run_batch(files, acoustid_apikey, acoustid_only=True, log_prefix="acoustid-check-mp3")
+
+    def _run_batch(
+        self, files: list[Path], acoustid_apikey: str | None, acoustid_only: bool, log_prefix: str
+    ) -> None:
         folder = Path(self.folder_edit.text())
         quality = self.quality_combo.currentData()
-        prefix = "acoustid-check" if acoustid_only else "acoustid-convert"
-        log_path = folder / f"{prefix}-{datetime.now():%Y%m%d-%H%M%S}.log"
+        log_path = folder / f"{log_prefix}-{datetime.now():%Y%m%d-%H%M%S}.log"
         acoustid_autocorrect = self.acoustid_autocorrect_checkbox.isChecked()
 
         self._acoustid_only_run = acoustid_only
+        self._populate_table(files)
         self.start_button.setEnabled(False)
         self.checkonly_button.setEnabled(False)
+        self.checkonly_mp3_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
         self._completed = 0
 
         self.converter = BatchConverter(
-            self.files,
+            files,
             quality,
             log_path,
             self.workers_spin.value(),
@@ -399,6 +434,9 @@ class MainWindow(QMainWindow):
         self, ok_count: int, fail_count: int, log_path: str, src_bytes: int, dst_bytes: int
     ) -> None:
         self.cancel_button.setEnabled(False)
+        # This rescans the folder fresh each time it's clicked, so it stays
+        # usable regardless of what Start/Check-Only just did to self.files.
+        self.checkonly_mp3_button.setEnabled(bool(self.folder_edit.text()))
 
         if self._acoustid_only_run:
             # Files are untouched by a check-only run, so both actions stay
@@ -431,6 +469,7 @@ class MainWindow(QMainWindow):
     def _on_batch_error(self, message: str) -> None:
         self.start_button.setEnabled(bool(self.files))
         self.checkonly_button.setEnabled(bool(self.files))
+        self.checkonly_mp3_button.setEnabled(bool(self.folder_edit.text()))
         self.cancel_button.setEnabled(False)
         self.status_label.setText(message)
         QMessageBox.critical(self, "Conversion failed", message)
