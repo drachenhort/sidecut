@@ -530,7 +530,7 @@ class MainWindow(QMainWindow):
         self.workers_spin.setRange(1, max(1, (os.cpu_count() or 4) * 2))
         self.workers_spin.setValue(min(4, os.cpu_count() or 1))
 
-        self.start_button = QPushButton("Convert")
+        self.start_button = QPushButton("Transcode")
         self.start_button.setEnabled(False)
         self.start_button.clicked.connect(self._start_conversion)
 

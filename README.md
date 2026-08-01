@@ -46,7 +46,7 @@ In the window:
    it against MusicBrainz before converting (see below). The AcoustID API
    key is entered via **Settings...** (masked like a password; hold the
    👁 button next to it to reveal), alongside the Lidarr settings.
-4. **Convert** — each file gets its own row with a live progress bar
+4. **Transcode** — each file gets its own row with a live progress bar
    (percent, encode speed) fed from ffmpeg's `-progress` stream. **Cancel**
    stops queued files immediately and lets in-flight ones finish or abort.
 
@@ -120,7 +120,7 @@ In the window:
   import never looks like it's just hanging. The window stays open after
   the import finishes (or fails) so you can scroll back through it.
 - Tick **Auto-import to Lidarr after conversion** to skip that manual
-  click: whenever **Convert** finishes converting at least one file, the
+  click: whenever **Transcode** finishes converting at least one file, the
   same import runs automatically right after. Off by default. It only
   runs after a real conversion (never after Check AcoustID Only/+MP3,
   which are meant to leave files untouched), and only if a URL/API key
