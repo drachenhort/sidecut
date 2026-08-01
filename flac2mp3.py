@@ -49,7 +49,7 @@ class BatchConverter(QThread):
     file_started = Signal(int)
     file_progress = Signal(int, float, str)
     file_finished = Signal(int, bool)
-    batch_finished = Signal(int, int, str, int, int)
+    batch_finished = Signal(int, int, str, "qint64", "qint64")
 
     def __init__(self, files: list[Path], quality: str, log_path: Path, workers: int) -> None:
         super().__init__()
