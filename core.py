@@ -6,6 +6,8 @@ import contextlib
 import json
 import shutil
 import subprocess
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, TextIO
@@ -150,6 +152,28 @@ _FREETEXT_DESCRIPTIONS: dict[str, str] = {
 
 
 ACOUSTID_LOOKUP_URL = "https://api.acoustid.org/v2/lookup"
+ACOUSTID_RATE_LIMIT_PER_SECOND = 4.0
+
+
+class _RateLimiter:
+    """Caps calls to at most `per_second`, blocking the calling thread as
+    needed. Thread-safe, so a single instance shared across worker threads
+    enforces a global rate regardless of how many run concurrently."""
+
+    def __init__(self, per_second: float) -> None:
+        self._min_interval = 1.0 / per_second
+        self._lock = threading.Lock()
+        self._last_call = 0.0
+
+    def wait(self) -> None:
+        with self._lock:
+            sleep_time = self._min_interval - (time.monotonic() - self._last_call)
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+            self._last_call = time.monotonic()
+
+
+_acoustid_rate_limiter = _RateLimiter(ACOUSTID_RATE_LIMIT_PER_SECOND)
 
 
 @dataclass
@@ -202,6 +226,7 @@ def _fpcalc_fingerprint(path: Path) -> tuple[int, str]:
 
 
 def _acoustid_lookup(api_key: str, duration: int, fingerprint: str) -> dict:
+    _acoustid_rate_limiter.wait()
     response = requests.get(
         ACOUSTID_LOOKUP_URL,
         params={

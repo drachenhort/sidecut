@@ -1,6 +1,8 @@
 import json
 import shutil
 import subprocess
+import threading
+import time
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -13,6 +15,14 @@ from mutagen.mp3 import MP3
 import core
 
 pytestmark = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+
+
+@pytest.fixture(autouse=True)
+def _fast_acoustid_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The real limiter is a module-level singleton shared across every
+    # check_acoustid() call so it can enforce AcoustID's global rate limit;
+    # swap in an effectively-unlimited one so tests don't pay for real sleeps.
+    monkeypatch.setattr(core, "_acoustid_rate_limiter", core._RateLimiter(1_000_000))
 
 
 def make_flac(path: Path, **tags: str) -> None:
@@ -149,6 +159,41 @@ def test_convert_one_reports_failure_instead_of_raising_on_missing_source(tmp_pa
 
 def _fake_fpcalc_run(*args, **kwargs) -> Mock:
     return Mock(stdout=json.dumps({"duration": 180, "fingerprint": "AQADfake"}))
+
+
+def test_rate_limiter_spaces_out_calls() -> None:
+    limiter = core._RateLimiter(per_second=20)  # 50ms apart
+    start = time.monotonic()
+    for _ in range(3):
+        limiter.wait()
+    elapsed = time.monotonic() - start
+    assert elapsed >= 0.1  # 2 gaps of >= 50ms between 3 calls
+
+
+def test_rate_limiter_shared_across_threads_caps_total_rate() -> None:
+    limiter = core._RateLimiter(per_second=20)  # 50ms apart
+    start = time.monotonic()
+    threads = [threading.Thread(target=limiter.wait) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    elapsed = time.monotonic() - start
+    assert elapsed >= 0.25  # 5 gaps of >= 50ms between 6 calls, however interleaved
+
+
+def test_check_acoustid_uses_the_shared_rate_limiter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src)
+    response = Mock()
+    response.json.return_value = {"status": "ok", "results": []}
+    waited = []
+    monkeypatch.setattr(core._acoustid_rate_limiter, "wait", lambda: waited.append(True))
+
+    with patch("subprocess.run", side_effect=_fake_fpcalc_run), patch("requests.get", return_value=response):
+        core.check_acoustid(src, "fake-api-key")
+
+    assert waited
 
 
 def test_check_acoustid_reports_match_for_tagged_recording(tmp_path: Path) -> None:

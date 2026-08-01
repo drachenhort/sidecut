@@ -48,6 +48,9 @@ In the window:
   found a candidate), **No match**, or **Error**. Hover a cell for details.
 - This is report-only: it never blocks, retags, or otherwise changes the
   conversion — it's purely informational, also written to the log file.
+- Lookups are capped at 4 requests/second total, no matter how many
+  parallel jobs are configured — workers block on a shared limiter rather
+  than each hammering the API independently.
 - The API key is saved between runs (Qt `QSettings`); get one for free at
   [acoustid.org](https://acoustid.org/).
 
