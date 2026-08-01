@@ -283,23 +283,37 @@ def check_acoustid(path: Path, api_key: str) -> AcoustIDCheck:
         summary = ""
 
     existing_id: str | None = None
+    tagged_artist = ""
+    tagged_title = ""
     with contextlib.suppress(Exception):
-        values = FLAC(path).get(_RECORDING_ID_KEY)
+        tags = FLAC(path)
+        values = tags.get(_RECORDING_ID_KEY)
         if values:
             existing_id = values[0]
+        tagged_artist = "; ".join(tags.get("artist", []))
+        tagged_title = "; ".join(tags.get("title", []))
 
     best_id = recording_ids[0] if recording_ids else None
     if existing_id:
         if existing_id in recording_ids:
             return AcoustIDCheck("match", f"Matches tagged recording (score {score:.2f})", existing_id)
-        return AcoustIDCheck(
-            "mismatch",
-            f"Tagged recording not found in AcoustID results; AcoustID suggests {summary} (score {score:.2f})",
-            best_id,
-        )
+        tagged = f"{tagged_artist} - {tagged_title}".strip(" -") or existing_id
+        if summary:
+            detail = (
+                f"Tagged as '{tagged}' (MBID {existing_id}) but AcoustID says the correct "
+                f"match is '{summary}' (MBID {best_id}, score {score:.2f})"
+            )
+        else:
+            detail = (
+                f"Tagged as '{tagged}' (MBID {existing_id}), but AcoustID's match "
+                f"(score {score:.2f}) has no linked MusicBrainz recording to compare against"
+            )
+        return AcoustIDCheck("mismatch", detail, best_id)
     if summary:
-        return AcoustIDCheck("identified", f"AcoustID suggests {summary} (score {score:.2f})", best_id)
-    return AcoustIDCheck("identified", f"AcoustID match found (score {score:.2f})", best_id)
+        detail = f"AcoustID suggests '{summary}' (MBID {best_id}, score {score:.2f})"
+        return AcoustIDCheck("identified", detail, best_id)
+    detail = f"AcoustID match found but has no linked MusicBrainz recording (score {score:.2f})"
+    return AcoustIDCheck("identified", detail, None)
 
 
 def track_duration(path: Path) -> float | None:

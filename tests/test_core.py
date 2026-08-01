@@ -214,7 +214,7 @@ def test_check_acoustid_reports_match_for_tagged_recording(tmp_path: Path) -> No
 
 def test_check_acoustid_reports_mismatch_when_tag_disagrees(tmp_path: Path) -> None:
     src = tmp_path / "song.flac"
-    make_flac(src, MUSICBRAINZ_TRACKID="mb-track-wrong")
+    make_flac(src, artist="Wrong Artist", title="Wrong Title", MUSICBRAINZ_TRACKID="mb-track-wrong")
     response = Mock()
     response.json.return_value = {
         "status": "ok",
@@ -232,6 +232,29 @@ def test_check_acoustid_reports_mismatch_when_tag_disagrees(tmp_path: Path) -> N
 
     assert result.status == "mismatch"
     assert result.recording_id == "mb-track-correct"
+    # The correct match (artist, title, and MBID) must be surfaced so the
+    # user knows what to retag it to, not just that it's wrong.
+    assert "Wrong Artist - Wrong Title" in result.detail
+    assert "mb-track-wrong" in result.detail
+    assert "Artist - Song" in result.detail
+    assert "mb-track-correct" in result.detail
+
+
+def test_check_acoustid_reports_mismatch_with_no_linked_recording(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src, artist="Wrong Artist", title="Wrong Title", MUSICBRAINZ_TRACKID="mb-track-wrong")
+    response = Mock()
+    response.json.return_value = {
+        "status": "ok",
+        "results": [{"id": "acoustid-1", "score": 0.6, "recordings": []}],
+    }
+
+    with patch("subprocess.run", side_effect=_fake_fpcalc_run), patch("requests.get", return_value=response):
+        result = core.check_acoustid(src, "fake-api-key")
+
+    assert result.status == "mismatch"
+    assert result.recording_id is None
+    assert "Wrong Artist - Wrong Title" in result.detail
 
 
 def test_check_acoustid_reports_identified_when_untagged(tmp_path: Path) -> None:

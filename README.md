@@ -45,7 +45,9 @@ In the window:
 - The result is shown in the **AcoustID** column: **Match** (agrees with
   the file's tagged `MUSICBRAINZ_TRACKID`), **Mismatch** (tagged ID isn't
   among AcoustID's results), **Identified** (no existing tag, but AcoustID
-  found a candidate), **No match**, or **Error**. Hover a cell for details.
+  found a candidate), **No match**, or **Error**. Hover a cell for details —
+  on a **Mismatch**, the tooltip spells out both the currently tagged
+  artist/title/MBID and what AcoustID says the correct one is.
 - This is report-only: it never blocks, retags, or otherwise changes the
   conversion — it's purely informational, also written to the log file.
 - Lookups are capped at 4 requests/second total, no matter how many

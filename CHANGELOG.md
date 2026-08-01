@@ -14,6 +14,10 @@ All notable changes to this project are documented in this file.
 ### Added
 - The last folder opened (via **Browse...** or on the command line) is
   now remembered between runs and reopened automatically on launch.
+- A **Mismatch** AcoustID result now spells out what the correct tag
+  would be: both the currently tagged artist/title/MBID and AcoustID's
+  suggested artist/title/MBID are included in the detail tooltip, instead
+  of just "not found in AcoustID results."
 - AcoustID lookups are now rate-limited to 4 requests/second, shared
   across all worker threads, so a high parallel-jobs setting can't exceed
   AcoustID's rate limit and get the client throttled or blocked.
