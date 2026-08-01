@@ -227,6 +227,23 @@ def test_check_acoustid_reports_error_on_missing_fpcalc(tmp_path: Path) -> None:
     assert result.status == "error"
 
 
+def test_check_acoustid_surfaces_api_error_message_instead_of_raising(tmp_path: Path) -> None:
+    # AcoustID returns a JSON body with the real reason (e.g. a bad API key)
+    # even on a 400 response; that message must reach the caller instead of
+    # a generic "400 Client Error" from raise_for_status().
+    src = tmp_path / "song.flac"
+    make_flac(src)
+    response = Mock()
+    response.json.return_value = {"status": "error", "error": {"code": 4, "message": "invalid API key"}}
+    response.raise_for_status.side_effect = AssertionError("should not be called when the body parses as JSON")
+
+    with patch("subprocess.run", side_effect=_fake_fpcalc_run), patch("requests.get", return_value=response):
+        result = core.check_acoustid(src, "bogus-key")
+
+    assert result.status == "error"
+    assert result.detail == "AcoustID error: invalid API key"
+
+
 def test_check_acoustid_reports_error_on_request_failure(tmp_path: Path) -> None:
     src = tmp_path / "song.flac"
     make_flac(src)

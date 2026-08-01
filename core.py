@@ -213,8 +213,15 @@ def _acoustid_lookup(api_key: str, duration: int, fingerprint: str) -> dict:
         },
         timeout=15,
     )
-    response.raise_for_status()
-    return response.json()
+    # AcoustID returns a JSON body with a specific reason (e.g. "invalid API
+    # key") even on 4xx responses, so parse the body before raising on
+    # status - otherwise the caller only sees a generic "400 Client Error"
+    # with no explanation of what actually went wrong.
+    try:
+        return response.json()
+    except ValueError:
+        response.raise_for_status()
+        raise
 
 
 def check_acoustid(path: Path, api_key: str) -> AcoustIDCheck:

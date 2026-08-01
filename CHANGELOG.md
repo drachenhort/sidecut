@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- AcoustID errors (e.g. an invalid API key) showed a useless generic
+  "400 Client Error" dump instead of the actual reason. AcoustID's JSON
+  error body is now parsed before raising on HTTP status, so the real
+  message (e.g. "invalid API key") is shown.
+
 ### Added
 - Optional AcoustID check (off by default): fingerprints each FLAC with
   `fpcalc` and looks it up via the AcoustID/MusicBrainz web service,
