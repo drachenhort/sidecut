@@ -10,7 +10,52 @@ from pathlib import Path
 from typing import Callable, TextIO
 
 from mutagen.flac import FLAC
-from mutagen.id3 import APIC, COMM, ID3, TALB, TCOM, TCON, TDRC, TIT2, TPE1, TPE2, TPOS, TRCK, TXXX
+from mutagen.id3 import (
+    APIC,
+    COMM,
+    ID3,
+    MVNM,
+    TALB,
+    TBPM,
+    TCMP,
+    TCOM,
+    TCON,
+    TCOP,
+    TDOR,
+    TDRC,
+    TDRL,
+    TENC,
+    TEXT,
+    TIT1,
+    TIT2,
+    TIT3,
+    TKEY,
+    TLAN,
+    TMED,
+    TMOO,
+    TOAL,
+    TOFN,
+    TOPE,
+    TPE1,
+    TPE2,
+    TPE3,
+    TPE4,
+    TPOS,
+    TPUB,
+    TRCK,
+    TSO2,
+    TSOA,
+    TSOC,
+    TSOP,
+    TSOT,
+    TSRC,
+    TSSE,
+    TSST,
+    TXXX,
+    UFID,
+    WCOP,
+    WOAR,
+)
 
 QUALITY_PRESETS: dict[str, list[str]] = {
     "v0": ["-q:a", "0"],
@@ -24,21 +69,82 @@ QUALITY_LABELS: dict[str, str] = {
     "cbr320": "320kbps CBR",
 }
 
-# Vorbis comment keys with a well-known ID3v2 frame equivalent. Everything
-# else (AcoustID, MusicBrainz, ReplayGain, and any other custom tag) is kept
-# verbatim as a TXXX frame so no tag is ever silently dropped.
+# Vorbis comment keys with a well-known ID3v2 frame equivalent, matching
+# Picard's tag mapping (picard/formats/id3.py) so files tagged by this tool
+# round-trip through Picard identically to ones it wrote itself.
 _STANDARD_FRAME_BUILDERS: dict[str, Callable[[str], object]] = {
     "title": lambda v: TIT2(encoding=3, text=v),
+    "subtitle": lambda v: TIT3(encoding=3, text=v),
+    "grouping": lambda v: TIT1(encoding=3, text=v),
     "artist": lambda v: TPE1(encoding=3, text=v),
     "album": lambda v: TALB(encoding=3, text=v),
     "albumartist": lambda v: TPE2(encoding=3, text=v),
+    "discsubtitle": lambda v: TSST(encoding=3, text=v),
+    "conductor": lambda v: TPE3(encoding=3, text=v),
+    "remixer": lambda v: TPE4(encoding=3, text=v),
+    "lyricist": lambda v: TEXT(encoding=3, text=v),
+    "composer": lambda v: TCOM(encoding=3, text=v),
+    "encodedby": lambda v: TENC(encoding=3, text=v),
     "date": lambda v: TDRC(encoding=3, text=v),
     "year": lambda v: TDRC(encoding=3, text=v),
+    "originaldate": lambda v: TDOR(encoding=3, text=v),
+    "releasedate": lambda v: TDRL(encoding=3, text=v),
     "genre": lambda v: TCON(encoding=3, text=v),
     "tracknumber": lambda v: TRCK(encoding=3, text=v),
     "discnumber": lambda v: TPOS(encoding=3, text=v),
-    "composer": lambda v: TCOM(encoding=3, text=v),
     "comment": lambda v: COMM(encoding=3, lang="eng", desc="", text=v),
+    "isrc": lambda v: TSRC(encoding=3, text=v),
+    "bpm": lambda v: TBPM(encoding=3, text=v),
+    "key": lambda v: TKEY(encoding=3, text=v),
+    "language": lambda v: TLAN(encoding=3, text=v),
+    "media": lambda v: TMED(encoding=3, text=v),
+    "mood": lambda v: TMOO(encoding=3, text=v),
+    "copyright": lambda v: TCOP(encoding=3, text=v),
+    "label": lambda v: TPUB(encoding=3, text=v),
+    "encodersettings": lambda v: TSSE(encoding=3, text=v),
+    "albumsort": lambda v: TSOA(encoding=3, text=v),
+    "artistsort": lambda v: TSOP(encoding=3, text=v),
+    "titlesort": lambda v: TSOT(encoding=3, text=v),
+    "albumartistsort": lambda v: TSO2(encoding=3, text=v),
+    "composersort": lambda v: TSOC(encoding=3, text=v),
+    "originalalbum": lambda v: TOAL(encoding=3, text=v),
+    "originalartist": lambda v: TOPE(encoding=3, text=v),
+    "originalfilename": lambda v: TOFN(encoding=3, text=v),
+    "compilation": lambda v: TCMP(encoding=3, text=v),
+    "movement": lambda v: MVNM(encoding=3, text=v),
+    "website": lambda v: WOAR(url=v),
+    "license": lambda v: WCOP(url=v),
+}
+
+# Vorbis comment key (the MusicBrainz recording ID) that Picard writes as a
+# UFID frame instead of a TXXX frame.
+_RECORDING_ID_KEY = "musicbrainz_trackid"
+_UFID_OWNER = "http://musicbrainz.org"
+
+# MusicBrainz/AcoustID Vorbis comment keys where Picard's TXXX description
+# differs from the raw tag name. Anything not listed here (and not a
+# standard frame above) is kept verbatim as TXXX:<tag name>, so no tag is
+# ever silently dropped.
+_FREETEXT_DESCRIPTIONS: dict[str, str] = {
+    "musicbrainz_artistid": "MusicBrainz Artist Id",
+    "musicbrainz_albumid": "MusicBrainz Album Id",
+    "musicbrainz_albumartistid": "MusicBrainz Album Artist Id",
+    "releasetype": "MusicBrainz Album Type",
+    "releasestatus": "MusicBrainz Album Status",
+    "musicbrainz_trmid": "MusicBrainz TRM Id",
+    "musicbrainz_releasetrackid": "MusicBrainz Release Track Id",
+    "musicbrainz_discid": "MusicBrainz Disc Id",
+    "musicbrainz_workid": "MusicBrainz Work Id",
+    "musicbrainz_composerid": "MusicBrainz Composer Id",
+    "musicbrainz_releasegroupid": "MusicBrainz Release Group Id",
+    "musicbrainz_originalalbumid": "MusicBrainz Original Album Id",
+    "musicbrainz_originalartistid": "MusicBrainz Original Artist Id",
+    "releasecountry": "MusicBrainz Album Release Country",
+    "musicip_puid": "MusicIP PUID",
+    "musicip_fingerprint": "MusicMagic Fingerprint",
+    "acoustid_fingerprint": "Acoustid Fingerprint",
+    "acoustid_id": "Acoustid Id",
+    "writer": "Writer",
 }
 
 
@@ -90,16 +196,25 @@ def _copy_pictures(flac_tags: FLAC, id3: ID3) -> None:
 
 def copy_tags(src: Path, dst: Path) -> None:
     """Copy every FLAC Vorbis comment and embedded picture onto the MP3,
-    mapping well-known tag keys to standard ID3v2.3 frames and preserving
-    everything else (including acoustic/fingerprint tags like ACOUSTID_*)
-    as TXXX frames; cover art is copied as APIC frames."""
+    mapping tag keys to the same ID3v2.3 frames MusicBrainz Picard would
+    write (standard text/URL frames, MusicBrainz/AcoustID TXXX frames, and
+    the recording ID as a UFID frame) so nothing is silently dropped and
+    Picard re-reads the file exactly as it left it; cover art is copied as
+    APIC frames."""
     flac_tags = FLAC(src)
     id3 = ID3()
     for key, values in flac_tags.items():
+        lower_key = key.lower()
+        if lower_key == _RECORDING_ID_KEY:
+            id3.add(UFID(owner=_UFID_OWNER, data=values[0].encode("ascii", "ignore")))
+            continue
         joined = "; ".join(values)
-        builder = _STANDARD_FRAME_BUILDERS.get(key.lower())
-        frame = builder(joined) if builder else TXXX(encoding=3, desc=key, text=joined)
-        id3.add(frame)
+        builder = _STANDARD_FRAME_BUILDERS.get(lower_key)
+        if builder:
+            id3.add(builder(joined))
+            continue
+        desc = _FREETEXT_DESCRIPTIONS.get(lower_key, key)
+        id3.add(TXXX(encoding=3, desc=desc, text=joined))
     _copy_pictures(flac_tags, id3)
     id3.save(dst, v2_version=3)
 

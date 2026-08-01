@@ -56,12 +56,15 @@ def test_convert_one_preserves_standard_and_custom_tags(tmp_path: Path) -> None:
     assert id3["TALB"].text == ["Test Album"]
     assert id3["TIT2"].text == ["Test Title"]
 
-    # ffmpeg lowercases Vorbis comment keys set via -metadata; copy_tags
-    # preserves whatever case is present in the source file's tags.
+    # AcoustID/MusicBrainz tags are written under Picard's TXXX descriptions
+    # (not the raw Vorbis comment key) so tagged files round-trip through
+    # Picard identically; the recording ID is a UFID frame, not TXXX.
     txxx_descs = {frame.desc: frame.text[0] for frame in id3.getall("TXXX")}
-    assert txxx_descs["acoustid_id"] == "abcd-1234"
-    assert txxx_descs["acoustid_fingerprint"] == "AQADfake"
-    assert txxx_descs["musicbrainz_trackid"] == "mb-track-123"
+    assert txxx_descs["Acoustid Id"] == "abcd-1234"
+    assert txxx_descs["Acoustid Fingerprint"] == "AQADfake"
+
+    ufid = id3.getall("UFID:http://musicbrainz.org")[0]
+    assert ufid.data == b"mb-track-123"
 
     assert MP3(dst).info.length > 0
 

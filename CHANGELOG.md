@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- Tag mapping now matches MusicBrainz Picard's own ID3v2.3 output:
+  many previously-generic-TXXX fields (isrc, conductor, remixer,
+  lyricist, sort fields, original release info, website, license,
+  etc.) are written as their proper standard ID3 frames, MusicBrainz
+  and AcoustID identifiers use Picard's exact TXXX descriptions (e.g.
+  `TXXX:Acoustid Id`), and the recording MBID (`MUSICBRAINZ_TRACKID`)
+  is now written as a `UFID` frame instead of `TXXX`, matching what
+  Picard itself writes and expects when re-reading the file.
+
 ### Fixed
 - If the log file can't be written to the scanned folder (e.g. a
   read-only NFS share), the conversion thread crashed silently and the
