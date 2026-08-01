@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.1]
+
 ### Fixed
 - `batch_finished` signal used a 32-bit `int` for total source/destination
   byte counts, causing an `OverflowError` on batches larger than ~2.1GB.

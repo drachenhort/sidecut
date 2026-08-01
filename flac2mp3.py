@@ -33,6 +33,8 @@ from PySide6.QtWidgets import (
 
 import core
 
+__version__ = "0.1"
+
 STATUS_COLUMN_LABELS = {"pending": "Pending", "running": "Converting...", "ok": "Done", "fail": "Failed"}
 
 
@@ -86,7 +88,7 @@ class BatchConverter(QThread):
 class MainWindow(QMainWindow):
     def __init__(self, initial_folder: Path | None = None) -> None:
         super().__init__()
-        self.setWindowTitle("flac2mp3")
+        self.setWindowTitle(f"flac2mp3 v{__version__}")
         self.resize(760, 480)
 
         self.files: list[Path] = []
