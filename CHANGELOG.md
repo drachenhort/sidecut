@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.2]
+
 ### Changed
 - Tag mapping now matches MusicBrainz Picard's own ID3v2.3 output:
   many previously-generic-TXXX fields (isrc, conductor, remixer,
