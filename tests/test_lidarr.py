@@ -53,6 +53,13 @@ def test_get_manual_import_candidates_passes_folder_and_returns_json() -> None:
 
     assert candidates == [{"path": "/music/song.mp3"}]
     assert get.call_args.kwargs["params"]["folder"] == "/music"
+    assert get.call_args.kwargs["timeout"] == lidarr.MANUAL_IMPORT_SCAN_TIMEOUT
+
+
+def test_get_manual_import_candidates_raises_clear_error_on_timeout() -> None:
+    with patch("requests.get", side_effect=requests.Timeout("timed out")):
+        with pytest.raises(lidarr.LidarrError, match="timed out"):
+            lidarr.get_manual_import_candidates("http://localhost:8686", "key", Path("/music"))
 
 
 def test_remap_path_to_lidarr_rewrites_matching_prefix() -> None:

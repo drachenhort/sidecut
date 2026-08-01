@@ -20,6 +20,13 @@ All notable changes to this project are documented in this file.
   dialog for a checkbox left on before setup was finished).
 
 ### Fixed
+- The manual-import folder scan used the same 30s timeout as quick
+  metadata calls, but it does real per-file work server-side (reading
+  embedded tags, matching releases) - a large folder or a busy Lidarr
+  instance could genuinely take longer than that and fail with a plain
+  "HTTP timed out" error. It now gets its own 180s timeout
+  (`MANUAL_IMPORT_SCAN_TIMEOUT`), and a timeout specifically now explains
+  what happened instead of a generic connection-error message.
 - **Important**: `clear_stale_trackfiles()` deleted *every* TrackFile
   record for an album whose scan hit an "already has file" rejection,
   not just the genuinely stale ones. `DELETE /api/v1/trackfile` removes

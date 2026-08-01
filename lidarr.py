@@ -36,6 +36,10 @@ from typing import Any
 import requests
 
 REQUEST_TIMEOUT = 30.0
+# The manual-import scan does real work per file server-side (reading
+# embedded tags, matching against releases), so a large folder or a
+# loaded Lidarr instance can easily take longer than a normal API call.
+MANUAL_IMPORT_SCAN_TIMEOUT = 180.0
 COMMAND_POLL_INTERVAL = 1.0
 COMMAND_POLL_TIMEOUT = 300.0
 
@@ -111,9 +115,15 @@ def get_manual_import_candidates(base_url: str, api_key: str, folder: Path | str
             _url(base_url, "/api/v1/manualimport"),
             headers=_headers(api_key),
             params={"folder": str(folder), "filterExistingFiles": "true", "replaceExistingFiles": "false"},
-            timeout=REQUEST_TIMEOUT,
+            timeout=MANUAL_IMPORT_SCAN_TIMEOUT,
         )
         response.raise_for_status()
+    except requests.Timeout as exc:
+        raise LidarrError(
+            f"Manual import scan of '{folder}' timed out after {MANUAL_IMPORT_SCAN_TIMEOUT:.0f}s. "
+            "Lidarr may still be working on it (large folder, or an otherwise busy instance) - "
+            "try again in a bit, or scan a smaller subfolder."
+        ) from exc
     except requests.RequestException as exc:
         raise LidarrError(f"Manual import scan failed: {exc}") from exc
     return response.json()
