@@ -3,6 +3,19 @@
 A native Qt/KDE window to recursively transcode a folder of FLAC files to
 MP3, in place, with an optional AcoustID/MusicBrainz identity check.
 
+The transcoding side exists because I wanted to save space on my hard
+drives, and in practice I've never been able to tell the difference
+between a FLAC and a 320kbps MP3. No offense meant to audiophiles who can
+and do - this tool just reflects my own tradeoff, not a claim that
+lossless doesn't matter.
+
+The AcoustID/MusicBrainz identity check was the original idea behind this
+program, and it stands on its own: **Check AcoustID Only** (and its
+**+ MP3** variant) fingerprint and verify a library's existing FLAC and MP3
+files against MusicBrainz - confirming or fixing `musicbrainz_trackid`
+tags and backfilling missing release-type tags - without transcoding
+anything. You don't need to want MP3s at all to get value out of this tool.
+
 ## Requirements
 
 - `ffmpeg` on `PATH`
@@ -33,16 +46,18 @@ In the window:
    it against MusicBrainz before converting (see below). The AcoustID API
    key is entered via **Settings...** (masked like a password; hold the
    👁 button next to it to reveal), alongside the Lidarr settings.
-4. **Start** — each file gets its own row with a live progress bar
+4. **Convert** — each file gets its own row with a live progress bar
    (percent, encode speed) fed from ffmpeg's `-progress` stream. **Cancel**
    stops queued files immediately and lets in-flight ones finish or abort.
 
 ## AcoustID check (optional)
 
 - Off by default. Tick **Check AcoustID** to run the check as part of a
-  normal conversion, or click **Check AcoustID Only** to just fingerprint
-  and look up every file (no conversion, files untouched) — handy for
-  vetting a library's tags before committing to a batch.
+  normal conversion, or click **Check AcoustID Only** (FLAC) / **Check
+  AcoustID (incl. MP3)** to just fingerprint and look up every file - no
+  conversion, and by default no files touched at all - a standalone way to
+  audit and fix MBIDs across an existing FLAC/MP3 library, with or without
+  ever converting anything.
 - Either way, each file is fingerprinted with `fpcalc` and looked up via
   the AcoustID web service.
 - The result is shown in the **AcoustID** column: **Match** (agrees with
@@ -105,7 +120,7 @@ In the window:
   import never looks like it's just hanging. The window stays open after
   the import finishes (or fails) so you can scroll back through it.
 - Tick **Auto-import to Lidarr after conversion** to skip that manual
-  click: whenever **Start** finishes converting at least one file, the
+  click: whenever **Convert** finishes converting at least one file, the
   same import runs automatically right after. Off by default. It only
   runs after a real conversion (never after Check AcoustID Only/+MP3,
   which are meant to leave files untouched), and only if a URL/API key
