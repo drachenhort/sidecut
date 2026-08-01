@@ -4,6 +4,11 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- `batch_finished` signal used a 32-bit `int` for total source/destination
+  byte counts, causing an `OverflowError` on batches larger than ~2.1GB.
+  The byte-count parameters are now `qint64`.
+
 ### Changed
 - Replaced the terminal UI (curses dashboard + folder browser) with a
   native PySide6/Qt window, matching `radiotop`'s stack and following the
