@@ -12,6 +12,20 @@ All notable changes to this project are documented in this file.
   prefix changed from `flac2mp3-` to `acoustid-convert-`.
 
 ### Added
+- Diagnosed live (an Eisbrecher compilation, "Eiskalt", showed up as 16
+  unmatched files with a "Couldn't find similar album" rejection): the
+  album was a real MusicBrainz release, but the artist's Lidarr metadata
+  profile had `Compilation` disabled, so it was never synced as a known
+  album to match against - not something a stale-trackfile or path-
+  mapping fix could touch. `explain_missing_album()` now detects this
+  automatically: on that specific rejection, it looks the album up via
+  Lidarr's own MusicBrainz-backed search and compares its type (both
+  primary - Album/EP/Single/Broadcast/Other - and secondary -
+  Compilation/Live/Remix/etc. - since Lidarr filters on both
+  independently) against what the artist's metadata profile allows,
+  replacing the generic rejection with a specific explanation (and what
+  to do about it) whenever it finds one. Cached per album folder so a
+  whole skipped album's tracks only trigger the lookup once.
 - New **Auto-import to Lidarr after conversion** checkbox: when Start
   finishes converting at least one file, automatically runs the same
   Lidarr import as the existing button - no extra click needed. Off by

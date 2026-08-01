@@ -148,6 +148,19 @@ In the window:
   match is left completely alone, and the result lists each skipped file
   together with Lidarr's own reason (e.g. "already has file") so a
   surprising "0 imported" is easy to diagnose instead of a dead end.
+- A "Couldn't find similar album" rejection gets special treatment: this
+  usually doesn't mean the album is missing from MusicBrainz, it means
+  Lidarr's own metadata profile for that artist has filtered it out of
+  the sync entirely (e.g. **Compilation**, **Live**, **Single**, etc. not
+  allowed) - so it was never even added as a known album to match
+  against. This tool checks that for you: it looks the album up via
+  Lidarr's own MusicBrainz-backed search and compares its type against
+  what the artist's metadata profile allows, so instead of a generic
+  rejection you get e.g. *"'Eiskalt' is a real release for Eisbrecher
+  (Compilation), but that type isn't allowed by this artist's metadata
+  profile, so Lidarr never synced it - add it manually in Lidarr, or
+  adjust the profile."* If no such explanation can be determined, the
+  plain Lidarr rejection text is shown instead.
 - Runs in the background and is independent of everything else in the
   window - it doesn't require or interact with Start, Check AcoustID, or
   the file table, and can be used on its own at any time a folder is

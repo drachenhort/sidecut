@@ -29,6 +29,7 @@ the same thing yourself.
 
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -217,6 +218,106 @@ def skip_reason(item: dict[str, Any]) -> str:
     if not item.get("tracks"):
         return "no track match"
     return "unmatched"
+
+
+_MISSING_ALBUM_REJECTION = "couldn't find similar album"
+
+
+def has_missing_album_rejection(item: dict[str, Any]) -> bool:
+    """Whether this candidate was rejected specifically because Lidarr
+    couldn't match it to any album it knows about for the artist - the
+    standard symptom of an album that's a real MusicBrainz release but got
+    filtered out of the artist's library sync by its metadata profile
+    (e.g. Compilation/Live/Remix not allowed). See explain_missing_album."""
+    return any(_MISSING_ALBUM_REJECTION in reason.lower() for reason in _rejection_reasons(item))
+
+
+def get_metadata_profile_disallowed_types(base_url: str, api_key: str, metadata_profile_id: int) -> set[str]:
+    """Return every album type name this metadata profile does *not*
+    allow - both primary (Album, EP, Single, Broadcast, Other) and
+    secondary (Studio, Compilation, Live, Remix, ...). Lidarr filters an
+    artist's album sync on both independently, so a release can be
+    excluded by either - candidates for why a real MusicBrainz release
+    never got synced into an artist's known albums in the first place."""
+    try:
+        response = requests.get(
+            _url(base_url, "/api/v1/metadataprofile"), headers=_headers(api_key), timeout=REQUEST_TIMEOUT
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise LidarrError(f"Failed to look up metadata profiles: {exc}") from exc
+    for profile in response.json():
+        if profile.get("id") == metadata_profile_id:
+            disallowed: set[str] = set()
+            for key in ("primaryAlbumTypes", "secondaryAlbumTypes"):
+                disallowed |= {t["albumType"]["name"] for t in profile.get(key, []) if not t.get("allowed", True)}
+            return disallowed
+    return set()
+
+
+def explain_missing_album(base_url: str, api_key: str, artist_id: int, folder_name: str) -> str | None:
+    """Best-effort diagnosis for a "Couldn't find similar album" rejection.
+
+    `folder_name` is the local album folder's name (e.g. "Eiskalt
+    (2011)"). Checks whether it actually matches a real MusicBrainz
+    release for this artist that's simply excluded by the artist's
+    metadata profile - the usual cause, rather than the album genuinely
+    not existing anywhere. Never raises (diagnostic only, on a
+    best-effort basis) - returns None if no explanation could be
+    determined, in which case the plain Lidarr rejection text still
+    applies."""
+    try:
+        artist_response = requests.get(
+            _url(base_url, f"/api/v1/artist/{artist_id}"), headers=_headers(api_key), timeout=REQUEST_TIMEOUT
+        )
+        artist_response.raise_for_status()
+        artist = artist_response.json()
+    except requests.RequestException:
+        return None
+
+    guessed_title = re.sub(r"\s*\(\d{4}\)\s*$", "", folder_name).strip()
+    if not guessed_title:
+        return None
+
+    try:
+        lookup_response = requests.get(
+            _url(base_url, "/api/v1/album/lookup"),
+            headers=_headers(api_key),
+            params={"term": f"{artist.get('artistName', '')} {guessed_title}"},
+            timeout=REQUEST_TIMEOUT,
+        )
+        lookup_response.raise_for_status()
+        candidates = lookup_response.json()
+    except requests.RequestException:
+        return None
+
+    matches = [
+        c
+        for c in candidates
+        if c.get("title", "").strip().lower() == guessed_title.lower()
+        and (c.get("artist") or {}).get("foreignArtistId") == artist.get("foreignArtistId")
+    ]
+    if not matches:
+        return None
+
+    try:
+        disallowed = get_metadata_profile_disallowed_types(base_url, api_key, artist.get("metadataProfileId", 0))
+    except LidarrError:
+        return None
+
+    for candidate in matches:
+        candidate_types = set(candidate.get("secondaryTypes") or [])
+        primary_type = candidate.get("albumType")
+        if primary_type:
+            candidate_types.add(primary_type)
+        blocked = disallowed & candidate_types
+        if blocked:
+            return (
+                f"'{candidate['title']}' is a real release for {artist.get('artistName', 'this artist')} "
+                f"({', '.join(sorted(blocked))}), but that type isn't allowed by this artist's metadata "
+                f"profile, so Lidarr never synced it - add it manually in Lidarr, or adjust the profile."
+            )
+    return None
 
 
 def _queue_command(base_url: str, api_key: str, payload: dict[str, Any]) -> int:
@@ -477,5 +578,18 @@ def import_folder(
             raise LidarrError(f"Lidarr reported the import failed: {result.get('message', 'unknown error')}")
         imported += len(batch)
 
-    skipped_names = [f"{Path(c.get('path', '?')).name}: {skip_reason(c)}" for c in skipped]
+    # Cached per album folder, since a whole skipped album's worth of
+    # tracks would otherwise trigger the same diagnostic lookup repeatedly.
+    explained_by_folder: dict[str, str | None] = {}
+    skipped_names = []
+    for c in skipped:
+        path = Path(c.get("path", "?"))
+        reason = skip_reason(c)
+        if artist_id is not None and has_missing_album_rejection(c):
+            folder = path.parent.name
+            if folder not in explained_by_folder:
+                explained_by_folder[folder] = explain_missing_album(base_url, api_key, artist_id, folder)
+            reason = explained_by_folder[folder] or reason
+        skipped_names.append(f"{path.name}: {reason}")
+
     return imported, len(skipped), skipped_names

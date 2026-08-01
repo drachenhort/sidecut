@@ -306,6 +306,160 @@ def test_skip_reason_falls_back_to_which_field_is_missing() -> None:
     assert lidarr.skip_reason({"artist": {"id": 1}, "album": {"id": 2}, "tracks": []}) == "no track match"
 
 
+def test_has_missing_album_rejection() -> None:
+    item = {"rejections": [{"reason": "Couldn't find similar album for [/music/Artist/Album (2011)]"}]}
+    assert lidarr.has_missing_album_rejection(item) is True
+    assert lidarr.has_missing_album_rejection({"rejections": [{"reason": "Track already has file"}]}) is False
+    assert lidarr.has_missing_album_rejection({"rejections": []}) is False
+
+
+def test_get_metadata_profile_disallowed_types() -> None:
+    response = Mock()
+    response.json.return_value = [
+        {
+            "id": 1,
+            "primaryAlbumTypes": [
+                {"albumType": {"name": "Album"}, "allowed": True},
+                {"albumType": {"name": "Single"}, "allowed": False},
+            ],
+            "secondaryAlbumTypes": [
+                {"albumType": {"name": "Studio"}, "allowed": True},
+                {"albumType": {"name": "Compilation"}, "allowed": False},
+                {"albumType": {"name": "Live"}, "allowed": False},
+            ],
+        }
+    ]
+
+    with patch("requests.get", return_value=response):
+        result = lidarr.get_metadata_profile_disallowed_types("http://localhost:8686", "key", 1)
+
+    assert result == {"Single", "Compilation", "Live"}
+
+
+def test_get_metadata_profile_disallowed_types_no_matching_profile() -> None:
+    response = Mock()
+    response.json.return_value = [{"id": 2, "secondaryAlbumTypes": []}]
+
+    with patch("requests.get", return_value=response):
+        result = lidarr.get_metadata_profile_disallowed_types("http://localhost:8686", "key", 1)
+
+    assert result == set()
+
+
+def test_explain_missing_album_finds_a_blocked_compilation() -> None:
+    artist_response = Mock()
+    artist_response.json.return_value = {
+        "artistName": "Eisbrecher",
+        "foreignArtistId": "36e348fe-0cbc-4343-8fa5-b91e727ce94f",
+        "metadataProfileId": 1,
+    }
+    lookup_response = Mock()
+    lookup_response.json.return_value = [
+        {
+            "title": "Eiskalt",
+            "secondaryTypes": ["Compilation"],
+            "artist": {"foreignArtistId": "36e348fe-0cbc-4343-8fa5-b91e727ce94f"},
+        }
+    ]
+    profile_response = Mock()
+    profile_response.json.return_value = [
+        {
+            "id": 1,
+            "secondaryAlbumTypes": [{"albumType": {"name": "Compilation"}, "allowed": False}],
+        }
+    ]
+
+    with patch("requests.get", side_effect=[artist_response, lookup_response, profile_response]):
+        result = lidarr.explain_missing_album("http://localhost:8686", "key", 333, "Eiskalt (2011)")
+
+    assert result is not None
+    assert "Compilation" in result
+    assert "Eiskalt" in result
+    assert "Eisbrecher" in result
+
+
+def test_explain_missing_album_returns_none_when_type_is_allowed() -> None:
+    artist_response = Mock()
+    artist_response.json.return_value = {
+        "artistName": "Eisbrecher",
+        "foreignArtistId": "36e348fe-0cbc-4343-8fa5-b91e727ce94f",
+        "metadataProfileId": 1,
+    }
+    lookup_response = Mock()
+    lookup_response.json.return_value = [
+        {
+            "title": "Eiskalt",
+            "secondaryTypes": ["Compilation"],
+            "artist": {"foreignArtistId": "36e348fe-0cbc-4343-8fa5-b91e727ce94f"},
+        }
+    ]
+    profile_response = Mock()
+    profile_response.json.return_value = [
+        {"id": 1, "secondaryAlbumTypes": [{"albumType": {"name": "Compilation"}, "allowed": True}]},
+    ]
+
+    with patch("requests.get", side_effect=[artist_response, lookup_response, profile_response]):
+        result = lidarr.explain_missing_album("http://localhost:8686", "key", 333, "Eiskalt (2011)")
+
+    assert result is None
+
+
+def test_explain_missing_album_finds_a_blocked_primary_type() -> None:
+    # Lidarr filters on primary album type (Album/EP/Single/Broadcast/
+    # Other) independently of secondary type - a Single can be excluded
+    # even with no Compilation/Live/etc. secondary type involved at all.
+    artist_response = Mock()
+    artist_response.json.return_value = {
+        "artistName": "Eisbrecher",
+        "foreignArtistId": "36e348fe-0cbc-4343-8fa5-b91e727ce94f",
+        "metadataProfileId": 1,
+    }
+    lookup_response = Mock()
+    lookup_response.json.return_value = [
+        {
+            "title": "10 Jahre Eisbrecher",
+            "albumType": "Single",
+            "secondaryTypes": [],
+            "artist": {"foreignArtistId": "36e348fe-0cbc-4343-8fa5-b91e727ce94f"},
+        }
+    ]
+    profile_response = Mock()
+    profile_response.json.return_value = [
+        {"id": 1, "primaryAlbumTypes": [{"albumType": {"name": "Single"}, "allowed": False}]},
+    ]
+
+    with patch("requests.get", side_effect=[artist_response, lookup_response, profile_response]):
+        result = lidarr.explain_missing_album("http://localhost:8686", "key", 333, "10 Jahre Eisbrecher")
+
+    assert result is not None
+    assert "Single" in result
+
+
+def test_explain_missing_album_returns_none_when_no_title_match() -> None:
+    artist_response = Mock()
+    artist_response.json.return_value = {
+        "artistName": "Eisbrecher",
+        "foreignArtistId": "36e348fe-0cbc-4343-8fa5-b91e727ce94f",
+        "metadataProfileId": 1,
+    }
+    lookup_response = Mock()
+    lookup_response.json.return_value = [
+        {"title": "Something Else Entirely", "secondaryTypes": [], "artist": {"foreignArtistId": "x"}}
+    ]
+
+    with patch("requests.get", side_effect=[artist_response, lookup_response]):
+        result = lidarr.explain_missing_album("http://localhost:8686", "key", 333, "Eiskalt (2011)")
+
+    assert result is None
+
+
+def test_explain_missing_album_returns_none_on_request_failure() -> None:
+    with patch("requests.get", side_effect=requests.ConnectionError("no route")):
+        result = lidarr.explain_missing_album("http://localhost:8686", "key", 333, "Eiskalt (2011)")
+
+    assert result is None
+
+
 def test_has_existing_file_rejection() -> None:
     blocked = {"album": {"id": 5}, "rejections": [{"reason": "Track already has file"}]}
     assert lidarr.has_existing_file_rejection(blocked) is True
@@ -512,6 +666,78 @@ def test_import_folder_only_submits_matched_candidates() -> None:
             "indexerFlags": 0,
             "disableReleaseSwitching": False,
         }
+    ]
+
+
+def test_import_folder_enriches_missing_album_skips_and_caches_per_folder() -> None:
+    artist_response = Mock()
+    artist_response.json.return_value = [{"id": 855, "path": "/music/Eisbrecher"}]
+    artist_trackfiles_response = Mock()
+    artist_trackfiles_response.json.return_value = []
+    candidates = [
+        {
+            "path": "/music/Eisbrecher/Eiskalt (2011)/01.mp3",
+            "artist": None,
+            "album": None,
+            "tracks": [],
+            "rejections": [{"reason": "Couldn't find similar album for [/music/Eisbrecher/Eiskalt (2011)]"}],
+        },
+        {
+            "path": "/music/Eisbrecher/Eiskalt (2011)/02.mp3",
+            "artist": None,
+            "album": None,
+            "tracks": [],
+            "rejections": [{"reason": "Couldn't find similar album for [/music/Eisbrecher/Eiskalt (2011)]"}],
+        },
+    ]
+    candidates_response = Mock()
+    candidates_response.json.return_value = candidates
+
+    with (
+        patch(
+            "requests.get", side_effect=[artist_response, artist_trackfiles_response, candidates_response]
+        ),
+        patch("lidarr.explain_missing_album", return_value="explained: it's a Compilation") as explain,
+    ):
+        imported, skipped, skipped_names = lidarr.import_folder(
+            "http://localhost:8686", "key", Path("/music/Eisbrecher/Eiskalt (2011)")
+        )
+
+    assert imported == 0
+    assert skipped == 2
+    assert skipped_names == ["01.mp3: explained: it's a Compilation", "02.mp3: explained: it's a Compilation"]
+    explain.assert_called_once_with("http://localhost:8686", "key", 855, "Eiskalt (2011)")
+
+
+def test_import_folder_falls_back_to_plain_reason_when_not_explained() -> None:
+    artist_response = Mock()
+    artist_response.json.return_value = [{"id": 855, "path": "/music/Eisbrecher"}]
+    artist_trackfiles_response = Mock()
+    artist_trackfiles_response.json.return_value = []
+    candidates = [
+        {
+            "path": "/music/Eisbrecher/Eiskalt (2011)/01.mp3",
+            "artist": None,
+            "album": None,
+            "tracks": [],
+            "rejections": [{"reason": "Couldn't find similar album for [/music/Eisbrecher/Eiskalt (2011)]"}],
+        },
+    ]
+    candidates_response = Mock()
+    candidates_response.json.return_value = candidates
+
+    with (
+        patch(
+            "requests.get", side_effect=[artist_response, artist_trackfiles_response, candidates_response]
+        ),
+        patch("lidarr.explain_missing_album", return_value=None),
+    ):
+        imported, skipped, skipped_names = lidarr.import_folder(
+            "http://localhost:8686", "key", Path("/music/Eisbrecher/Eiskalt (2011)")
+        )
+
+    assert skipped_names == [
+        "01.mp3: Couldn't find similar album for [/music/Eisbrecher/Eiskalt (2011)]"
     ]
 
 
