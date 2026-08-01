@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, TextIO
 
+import requests
 from mutagen.flac import FLAC
 from mutagen.id3 import (
     APIC,
@@ -147,6 +149,19 @@ _FREETEXT_DESCRIPTIONS: dict[str, str] = {
 }
 
 
+ACOUSTID_LOOKUP_URL = "https://api.acoustid.org/v2/lookup"
+
+
+@dataclass
+class AcoustIDCheck:
+    """Result of comparing a FLAC's fingerprint against the AcoustID/MusicBrainz
+    database. Purely informational: never blocks or modifies conversion."""
+
+    status: str  # "match" | "mismatch" | "identified" | "no_match" | "error"
+    detail: str
+    recording_id: str | None = None
+
+
 @dataclass
 class ConversionResult:
     source: Path
@@ -169,8 +184,90 @@ def check_ffmpeg() -> bool:
     return shutil.which("ffmpeg") is not None
 
 
+def check_fpcalc() -> bool:
+    return shutil.which("fpcalc") is not None
+
+
 def find_flac_files(root: Path) -> list[Path]:
     return sorted(p for p in root.rglob("*") if p.is_file() and p.suffix.lower() == ".flac")
+
+
+def _fpcalc_fingerprint(path: Path) -> tuple[int, str]:
+    """Run chromaprint's fpcalc and return (duration_seconds, fingerprint)."""
+    proc = subprocess.run(
+        ["fpcalc", "-json", str(path)], capture_output=True, text=True, timeout=60, check=True,
+    )
+    data = json.loads(proc.stdout)
+    return int(data["duration"]), data["fingerprint"]
+
+
+def _acoustid_lookup(api_key: str, duration: int, fingerprint: str) -> dict:
+    response = requests.get(
+        ACOUSTID_LOOKUP_URL,
+        params={
+            "client": api_key,
+            "duration": duration,
+            "fingerprint": fingerprint,
+            "meta": "recordings",
+            "format": "json",
+        },
+        timeout=15,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def check_acoustid(path: Path, api_key: str) -> AcoustIDCheck:
+    """Fingerprint `path` with fpcalc, look it up via the AcoustID web service,
+    and compare the best match against the file's existing musicbrainz_trackid
+    tag (if any). Never raises: any failure is reported as an "error" result."""
+    try:
+        duration, fingerprint = _fpcalc_fingerprint(path)
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError, KeyError) as exc:
+        return AcoustIDCheck("error", f"fingerprinting failed: {exc}")
+
+    try:
+        data = _acoustid_lookup(api_key, duration, fingerprint)
+    except requests.RequestException as exc:
+        return AcoustIDCheck("error", f"AcoustID request failed: {exc}")
+
+    if data.get("status") != "ok":
+        message = data.get("error", {}).get("message", "unknown error")
+        return AcoustIDCheck("error", f"AcoustID error: {message}")
+
+    results = sorted(data.get("results", []), key=lambda r: r.get("score", 0.0), reverse=True)
+    if not results:
+        return AcoustIDCheck("no_match", "No AcoustID match found")
+
+    best = results[0]
+    score = best.get("score", 0.0)
+    recordings = best.get("recordings") or []
+    recording_ids = [r["id"] for r in recordings if "id" in r]
+    if recordings:
+        artist = ", ".join(a["name"] for a in recordings[0].get("artists", []) if "name" in a)
+        title = recordings[0].get("title", "")
+        summary = f"{artist} - {title}".strip(" -")
+    else:
+        summary = ""
+
+    existing_id: str | None = None
+    with contextlib.suppress(Exception):
+        values = FLAC(path).get(_RECORDING_ID_KEY)
+        if values:
+            existing_id = values[0]
+
+    best_id = recording_ids[0] if recording_ids else None
+    if existing_id:
+        if existing_id in recording_ids:
+            return AcoustIDCheck("match", f"Matches tagged recording (score {score:.2f})", existing_id)
+        return AcoustIDCheck(
+            "mismatch",
+            f"Tagged recording not found in AcoustID results; AcoustID suggests {summary} (score {score:.2f})",
+            best_id,
+        )
+    if summary:
+        return AcoustIDCheck("identified", f"AcoustID suggests {summary} (score {score:.2f})", best_id)
+    return AcoustIDCheck("identified", f"AcoustID match found (score {score:.2f})", best_id)
 
 
 def track_duration(path: Path) -> float | None:

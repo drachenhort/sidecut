@@ -1,2 +1,3 @@
 mutagen
 PySide6
+requests

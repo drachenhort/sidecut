@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Optional AcoustID check (off by default): fingerprints each FLAC with
+  `fpcalc` and looks it up via the AcoustID/MusicBrainz web service,
+  reporting Match/Mismatch/Identified/No match/Error per file in a new
+  table column and in the log. Requires `fpcalc` on PATH and a free
+  AcoustID API key entered in the UI. Report-only — never blocks or
+  alters conversion.
+
 ## [0.4]
 
 ### Added

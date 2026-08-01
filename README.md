@@ -8,7 +8,11 @@ MP3, in place.
 - `ffmpeg` on `PATH`
 - Python 3.10+
 - `pip install -r requirements.txt` (`mutagen` for tag copying, `PySide6`
-  for the GUI — auto-follows your KDE Plasma/Breeze theme)
+  for the GUI — auto-follows your KDE Plasma/Breeze theme, `requests` for
+  the optional AcoustID lookup)
+- Optional: `fpcalc` (from `chromaprint`/`libchromaprint-tools`) and a free
+  [AcoustID](https://acoustid.org/) API key, only needed if you enable the
+  AcoustID check
 
 ## Usage
 
@@ -22,9 +26,29 @@ In the window:
 1. **Browse...** to pick the folder to scan recursively (native KDE folder
    dialog).
 2. Choose a **quality** preset and the number of **parallel jobs**.
-3. **Start** — each file gets its own row with a live progress bar
+3. Optionally tick **Check AcoustID** and enter an AcoustID API key to
+   fingerprint each file and compare it against MusicBrainz before
+   converting (see below).
+4. **Start** — each file gets its own row with a live progress bar
    (percent, encode speed) fed from ffmpeg's `-progress` stream. **Cancel**
    stops queued files immediately and lets in-flight ones finish or abort.
+
+## AcoustID check (optional)
+
+- Off by default. Tick **Check AcoustID** to run the check as part of a
+  normal conversion, or click **Check AcoustID Only** to just fingerprint
+  and look up every file (no conversion, files untouched) — handy for
+  vetting a library's tags before committing to a batch.
+- Either way, each file is fingerprinted with `fpcalc` and looked up via
+  the AcoustID web service.
+- The result is shown in the **AcoustID** column: **Match** (agrees with
+  the file's tagged `MUSICBRAINZ_TRACKID`), **Mismatch** (tagged ID isn't
+  among AcoustID's results), **Identified** (no existing tag, but AcoustID
+  found a candidate), **No match**, or **Error**. Hover a cell for details.
+- This is report-only: it never blocks, retags, or otherwise changes the
+  conversion — it's purely informational, also written to the log file.
+- The API key is saved between runs (Qt `QSettings`); get one for free at
+  [acoustid.org](https://acoustid.org/).
 
 ## Behavior
 

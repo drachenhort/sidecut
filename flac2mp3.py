@@ -15,6 +15,7 @@ from PySide6.QtCore import QSettings, Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QHBoxLayout,
@@ -36,7 +37,22 @@ import core
 
 __version__ = "0.4"
 
-STATUS_COLUMN_LABELS = {"pending": "Pending", "running": "Converting...", "ok": "Done", "fail": "Failed"}
+STATUS_COLUMN_LABELS = {
+    "pending": "Pending",
+    "running": "Converting...",
+    "ok": "Done",
+    "fail": "Failed",
+    "checking": "Checking...",
+    "checked": "Checked",
+}
+
+ACOUSTID_STATUS_LABELS = {
+    "match": "Match",
+    "mismatch": "Mismatch",
+    "identified": "Identified",
+    "no_match": "No match",
+    "error": "Error",
+}
 
 
 def _format_bytes(num_bytes: int) -> str:
@@ -52,21 +68,47 @@ class BatchConverter(QThread):
     file_started = Signal(int)
     file_progress = Signal(int, float, str)
     file_finished = Signal(int, bool)
+    acoustid_checked = Signal(int, str, str)
     batch_finished = Signal(int, int, str, "qint64", "qint64")
     batch_error = Signal(str)
 
-    def __init__(self, files: list[Path], quality: str, log_path: Path, workers: int) -> None:
+    def __init__(
+        self,
+        files: list[Path],
+        quality: str,
+        log_path: Path,
+        workers: int,
+        acoustid_apikey: str | None = None,
+        acoustid_only: bool = False,
+    ) -> None:
         super().__init__()
         self.files = files
         self.quality_args = core.QUALITY_PRESETS[quality]
         self.log_path = log_path
         self.workers = workers
+        self.acoustid_apikey = acoustid_apikey
+        self.acoustid_only = acoustid_only
         self._cancel_event = threading.Event()
 
     def cancel(self) -> None:
         self._cancel_event.set()
 
+    def _check_acoustid(self, index: int, path: Path, log) -> core.AcoustIDCheck:
+        result = core.check_acoustid(path, self.acoustid_apikey)
+        log.write(f"AcoustID [{result.status}]: {path}: {result.detail}\n")
+        self.acoustid_checked.emit(index, result.status, result.detail)
+        return result
+
     def _convert(self, index: int, path: Path, log) -> core.ConversionResult:
+        if self.acoustid_only:
+            self.file_started.emit(index)
+            result = self._check_acoustid(index, path, log)
+            ok = result.status != "error" and not self._cancel_event.is_set()
+            self.file_finished.emit(index, ok)
+            return core.ConversionResult(path, ok)
+
+        if self.acoustid_apikey and not self._cancel_event.is_set():
+            self._check_acoustid(index, path, log)
         self.file_started.emit(index)
         on_progress = lambda p: self.file_progress.emit(index, p.percent, p.speed)  # noqa: E731
         result = core.convert_one(
@@ -111,6 +153,7 @@ class MainWindow(QMainWindow):
         self.files: list[Path] = []
         self.converter: BatchConverter | None = None
         self.settings = QSettings("flac2mp3", "flac2mp3")
+        self._acoustid_only_run = False
 
         self._build_ui()
         if initial_folder is not None:
@@ -123,9 +166,10 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(self._build_folder_row())
         layout.addLayout(self._build_options_row())
+        layout.addLayout(self._build_acoustid_row())
 
-        self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["File", "Status", "Progress"])
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["File", "Status", "Progress", "AcoustID"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.NoSelection)
@@ -182,6 +226,31 @@ class MainWindow(QMainWindow):
         row.addWidget(self.cancel_button)
         return row
 
+    def _build_acoustid_row(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+
+        self.acoustid_checkbox = QCheckBox("Check AcoustID")
+        self.acoustid_checkbox.setChecked(self.settings.value("acoustid_enabled", False, type=bool))
+        self.acoustid_checkbox.toggled.connect(self._save_acoustid_settings)
+
+        self.acoustid_key_edit = QLineEdit()
+        self.acoustid_key_edit.setPlaceholderText("AcoustID API key (get one at acoustid.org)")
+        self.acoustid_key_edit.setText(self.settings.value("acoustid_api_key", ""))
+        self.acoustid_key_edit.editingFinished.connect(self._save_acoustid_settings)
+
+        self.checkonly_button = QPushButton("Check AcoustID Only")
+        self.checkonly_button.setEnabled(False)
+        self.checkonly_button.clicked.connect(self._start_acoustid_check_only)
+
+        row.addWidget(self.acoustid_checkbox)
+        row.addWidget(self.acoustid_key_edit, stretch=1)
+        row.addWidget(self.checkonly_button)
+        return row
+
+    def _save_acoustid_settings(self) -> None:
+        self.settings.setValue("acoustid_enabled", self.acoustid_checkbox.isChecked())
+        self.settings.setValue("acoustid_api_key", self.acoustid_key_edit.text().strip())
+
     def _save_quality_setting(self) -> None:
         self.settings.setValue("quality", self.quality_combo.currentData())
 
@@ -196,6 +265,7 @@ class MainWindow(QMainWindow):
         self.files = core.find_flac_files(folder)
         self._populate_table()
         self.start_button.setEnabled(bool(self.files))
+        self.checkonly_button.setEnabled(bool(self.files))
         if self.files:
             self.status_label.setText(f"{len(self.files)} FLAC file(s) found under {folder}")
         else:
@@ -209,22 +279,53 @@ class MainWindow(QMainWindow):
             bar = QProgressBar()
             bar.setRange(0, 100)
             self.table.setCellWidget(row, 2, bar)
+            self.table.setItem(row, 3, QTableWidgetItem("-"))
         self.overall_bar.setRange(0, max(1, len(self.files)))
         self.overall_bar.setValue(0)
 
+    def _require_acoustid_apikey(self) -> str | None:
+        if not core.check_fpcalc():
+            QMessageBox.critical(self, "flac2mp3", "The AcoustID check needs fpcalc (chromaprint) on PATH.")
+            return None
+        apikey = self.acoustid_key_edit.text().strip()
+        if not apikey:
+            QMessageBox.critical(self, "flac2mp3", "The AcoustID check needs an API key.")
+            return None
+        return apikey
+
     def _start_conversion(self) -> None:
+        acoustid_apikey = None
+        if self.acoustid_checkbox.isChecked():
+            acoustid_apikey = self._require_acoustid_apikey()
+            if acoustid_apikey is None:
+                return
+        self._run_batch(acoustid_apikey, acoustid_only=False)
+
+    def _start_acoustid_check_only(self) -> None:
+        acoustid_apikey = self._require_acoustid_apikey()
+        if acoustid_apikey is None:
+            return
+        self._run_batch(acoustid_apikey, acoustid_only=True)
+
+    def _run_batch(self, acoustid_apikey: str | None, acoustid_only: bool) -> None:
         folder = Path(self.folder_edit.text())
         quality = self.quality_combo.currentData()
-        log_path = folder / f"flac2mp3-{datetime.now():%Y%m%d-%H%M%S}.log"
+        prefix = "acoustid-check" if acoustid_only else "flac2mp3"
+        log_path = folder / f"{prefix}-{datetime.now():%Y%m%d-%H%M%S}.log"
 
+        self._acoustid_only_run = acoustid_only
         self.start_button.setEnabled(False)
+        self.checkonly_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
         self._completed = 0
 
-        self.converter = BatchConverter(self.files, quality, log_path, self.workers_spin.value())
+        self.converter = BatchConverter(
+            self.files, quality, log_path, self.workers_spin.value(), acoustid_apikey, acoustid_only
+        )
         self.converter.file_started.connect(self._on_file_started)
         self.converter.file_progress.connect(self._on_file_progress)
         self.converter.file_finished.connect(self._on_file_finished)
+        self.converter.acoustid_checked.connect(self._on_acoustid_checked)
         self.converter.batch_finished.connect(self._on_batch_finished)
         self.converter.batch_error.connect(self._on_batch_error)
         self.converter.start()
@@ -236,7 +337,8 @@ class MainWindow(QMainWindow):
         self.status_label.setText("Cancelling after in-flight files finish...")
 
     def _on_file_started(self, row: int) -> None:
-        self.table.item(row, 1).setText(STATUS_COLUMN_LABELS["running"])
+        label = "checking" if self._acoustid_only_run else "running"
+        self.table.item(row, 1).setText(STATUS_COLUMN_LABELS[label])
 
     def _on_file_progress(self, row: int, percent: float, speed: str) -> None:
         bar = self.table.cellWidget(row, 2)
@@ -244,20 +346,39 @@ class MainWindow(QMainWindow):
             bar.setValue(int(percent))
             bar.setFormat(f"{percent:.0f}%  {speed}")
 
+    def _on_acoustid_checked(self, row: int, status: str, detail: str) -> None:
+        item = self.table.item(row, 3)
+        item.setText(ACOUSTID_STATUS_LABELS.get(status, status))
+        item.setToolTip(detail)
+
     def _on_file_finished(self, row: int, ok: bool) -> None:
-        self.table.item(row, 1).setText(STATUS_COLUMN_LABELS["ok" if ok else "fail"])
+        if self._acoustid_only_run:
+            label = "checked"
+        else:
+            label = "ok" if ok else "fail"
+        self.table.item(row, 1).setText(STATUS_COLUMN_LABELS[label])
         self._completed += 1
         self.overall_bar.setValue(self._completed)
 
     def _on_batch_finished(
         self, ok_count: int, fail_count: int, log_path: str, src_bytes: int, dst_bytes: int
     ) -> None:
+        self.cancel_button.setEnabled(False)
+
+        if self._acoustid_only_run:
+            # Files are untouched by a check-only run, so both actions stay
+            # available for a follow-up conversion.
+            self.start_button.setEnabled(bool(self.files))
+            self.checkonly_button.setEnabled(bool(self.files))
+            self.status_label.setText(f"AcoustID check complete: {ok_count} checked, {fail_count} errored")
+            return
+
         # Leave the table as-is (per-file Done/Failed results) so the run can
         # be reviewed; Browse a folder again to start a new batch. Start
         # stays disabled since self.files now points at already-converted
         # (deleted) sources.
         self.start_button.setEnabled(False)
-        self.cancel_button.setEnabled(False)
+        self.checkonly_button.setEnabled(False)
         self.status_label.setText(f"Converted: {ok_count}  Failed: {fail_count}  Log: {log_path}")
 
         if ok_count:
@@ -273,7 +394,8 @@ class MainWindow(QMainWindow):
             )
 
     def _on_batch_error(self, message: str) -> None:
-        self.start_button.setEnabled(True)
+        self.start_button.setEnabled(bool(self.files))
+        self.checkonly_button.setEnabled(bool(self.files))
         self.cancel_button.setEnabled(False)
         self.status_label.setText(message)
         QMessageBox.critical(self, "Conversion failed", message)

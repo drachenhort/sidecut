@@ -1,8 +1,11 @@
+import json
 import shutil
 import subprocess
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 import pytest
+import requests
 from mutagen.flac import FLAC, Picture
 from mutagen.id3 import ID3
 from mutagen.mp3 import MP3
@@ -142,6 +145,99 @@ def test_convert_one_reports_failure_instead_of_raising_on_missing_source(tmp_pa
 
     assert not result.ok
     assert not (tmp_path / "gone.mp3").exists()
+
+
+def _fake_fpcalc_run(*args, **kwargs) -> Mock:
+    return Mock(stdout=json.dumps({"duration": 180, "fingerprint": "AQADfake"}))
+
+
+def test_check_acoustid_reports_match_for_tagged_recording(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src, MUSICBRAINZ_TRACKID="mb-track-123")
+    response = Mock()
+    response.json.return_value = {
+        "status": "ok",
+        "results": [{"id": "acoustid-1", "score": 0.95, "recordings": [{"id": "mb-track-123", "title": "Song"}]}],
+    }
+
+    with patch("subprocess.run", side_effect=_fake_fpcalc_run), patch("requests.get", return_value=response):
+        result = core.check_acoustid(src, "fake-api-key")
+
+    assert result.status == "match"
+    assert result.recording_id == "mb-track-123"
+
+
+def test_check_acoustid_reports_mismatch_when_tag_disagrees(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src, MUSICBRAINZ_TRACKID="mb-track-wrong")
+    response = Mock()
+    response.json.return_value = {
+        "status": "ok",
+        "results": [
+            {
+                "id": "acoustid-1",
+                "score": 0.95,
+                "recordings": [{"id": "mb-track-correct", "title": "Song", "artists": [{"name": "Artist"}]}],
+            }
+        ],
+    }
+
+    with patch("subprocess.run", side_effect=_fake_fpcalc_run), patch("requests.get", return_value=response):
+        result = core.check_acoustid(src, "fake-api-key")
+
+    assert result.status == "mismatch"
+    assert result.recording_id == "mb-track-correct"
+
+
+def test_check_acoustid_reports_identified_when_untagged(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src)
+    response = Mock()
+    response.json.return_value = {
+        "status": "ok",
+        "results": [{"id": "acoustid-1", "score": 0.9, "recordings": [{"id": "mb-track-1", "title": "Song"}]}],
+    }
+
+    with patch("subprocess.run", side_effect=_fake_fpcalc_run), patch("requests.get", return_value=response):
+        result = core.check_acoustid(src, "fake-api-key")
+
+    assert result.status == "identified"
+    assert result.recording_id == "mb-track-1"
+
+
+def test_check_acoustid_reports_no_match(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src)
+    response = Mock()
+    response.json.return_value = {"status": "ok", "results": []}
+
+    with patch("subprocess.run", side_effect=_fake_fpcalc_run), patch("requests.get", return_value=response):
+        result = core.check_acoustid(src, "fake-api-key")
+
+    assert result.status == "no_match"
+
+
+def test_check_acoustid_reports_error_on_missing_fpcalc(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src)
+
+    with patch("subprocess.run", side_effect=FileNotFoundError("fpcalc not found")):
+        result = core.check_acoustid(src, "fake-api-key")
+
+    assert result.status == "error"
+
+
+def test_check_acoustid_reports_error_on_request_failure(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src)
+
+    with (
+        patch("subprocess.run", side_effect=_fake_fpcalc_run),
+        patch("requests.get", side_effect=requests.ConnectionError("no network")),
+    ):
+        result = core.check_acoustid(src, "fake-api-key")
+
+    assert result.status == "error"
 
 
 def test_convert_one_respects_cancellation(tmp_path: Path) -> None:
