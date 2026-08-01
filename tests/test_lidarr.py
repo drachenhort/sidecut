@@ -176,9 +176,32 @@ def test_get_album_trackfiles_passes_album_id() -> None:
     assert get.call_args.kwargs["params"] == {"albumId": 5}
 
 
-def test_clear_stale_trackfiles_deletes_each_one() -> None:
+def test_lidarr_path_to_local_rewrites_matching_prefix() -> None:
+    result = lidarr.lidarr_path_to_local("/music/Artist/song.mp3", "/home/user/Music", "/music")
+    assert result == Path("/home/user/Music/Artist/song.mp3")
+
+
+def test_lidarr_path_to_local_leaves_path_unchanged_when_roots_blank() -> None:
+    assert lidarr.lidarr_path_to_local("/music/Artist/song.mp3", "", "/music") == Path("/music/Artist/song.mp3")
+    assert lidarr.lidarr_path_to_local("/music/Artist/song.mp3", "/home/user/Music", "") == Path(
+        "/music/Artist/song.mp3"
+    )
+
+
+def test_clear_stale_trackfiles_only_deletes_records_whose_file_is_actually_gone(tmp_path: Path) -> None:
+    # This is the real-world safety net: DELETE /api/v1/trackfile removes
+    # the actual file, so a record must never be deleted just because it
+    # belongs to the album - only when its file is confirmed missing.
+    still_there = tmp_path / "02 - still there.mp3"
+    still_there.write_bytes(b"data")
+    # "01 - gone.flac" deliberately not created: this tool already deleted
+    # it during conversion, so the trackfile record for it is genuinely stale.
+
     list_response = Mock()
-    list_response.json.return_value = [{"id": 1}, {"id": 2}]
+    list_response.json.return_value = [
+        {"id": 1, "path": str(tmp_path / "01 - gone.flac")},
+        {"id": 2, "path": str(still_there)},
+    ]
 
     with (
         patch("requests.get", return_value=list_response),
@@ -186,9 +209,49 @@ def test_clear_stale_trackfiles_deletes_each_one() -> None:
     ):
         count = lidarr.clear_stale_trackfiles("http://localhost:8686", "key", 5)
 
-    assert count == 2
-    deleted_ids = sorted(call.args[0].rsplit("/", 1)[-1] for call in delete.call_args_list)
-    assert deleted_ids == ["1", "2"]
+    assert count == 1
+    deleted_ids = [call.args[0].rsplit("/", 1)[-1] for call in delete.call_args_list]
+    assert deleted_ids == ["1"]
+    assert still_there.exists()  # never touched
+
+
+def test_clear_stale_trackfiles_skips_when_parent_directory_is_unreachable(tmp_path: Path) -> None:
+    # If we can't even see the containing folder, this machine likely
+    # isn't looking at the same filesystem Lidarr is (e.g. a cross-host
+    # setup with local_root/lidarr_root not configured). Guessing "stale"
+    # in that situation is exactly what caused real data loss - so this
+    # must leave the record alone rather than delete it.
+    list_response = Mock()
+    list_response.json.return_value = [{"id": 1, "path": "/totally/unrelated/namespace/song.mp3"}]
+
+    with (
+        patch("requests.get", return_value=list_response),
+        patch("requests.delete", return_value=Mock()) as delete,
+    ):
+        count = lidarr.clear_stale_trackfiles("http://localhost:8686", "key", 5)
+
+    assert count == 0
+    delete.assert_not_called()
+
+
+def test_clear_stale_trackfiles_uses_path_mapping_when_configured(tmp_path: Path) -> None:
+    still_there = tmp_path / "Artist" / "song.mp3"
+    still_there.parent.mkdir()
+    still_there.write_bytes(b"data")
+
+    list_response = Mock()
+    list_response.json.return_value = [{"id": 1, "path": "/music/Artist/song.mp3"}]
+
+    with (
+        patch("requests.get", return_value=list_response),
+        patch("requests.delete", return_value=Mock()) as delete,
+    ):
+        count = lidarr.clear_stale_trackfiles(
+            "http://localhost:8686", "key", 5, local_root=str(tmp_path), lidarr_root="/music"
+        )
+
+    assert count == 0
+    delete.assert_not_called()
 
 
 def test_import_folder_remaps_folder_to_lidarrs_path_before_scanning() -> None:
@@ -264,9 +327,12 @@ def test_import_folder_skips_submit_when_nothing_matched() -> None:
     post.assert_not_called()
 
 
-def test_import_folder_clears_stale_trackfile_and_retries() -> None:
+def test_import_folder_clears_stale_trackfile_and_retries(tmp_path: Path) -> None:
     # First scan: Lidarr rejects the MP3 because it still has a TrackFile
-    # record for the FLAC this tool converted and deleted.
+    # record for the FLAC this tool converted and deleted (the file is
+    # genuinely gone locally - only "a.mp3" exists, "a.flac" doesn't).
+    (tmp_path / "a.mp3").write_bytes(b"data")
+
     first_scan = [
         {
             "path": "/music/a.mp3",
@@ -281,7 +347,7 @@ def test_import_folder_clears_stale_trackfile_and_retries() -> None:
     first_scan_response = Mock()
     first_scan_response.json.return_value = first_scan
     trackfiles_response = Mock()
-    trackfiles_response.json.return_value = [{"id": 99}]
+    trackfiles_response.json.return_value = [{"id": 99, "path": "/music/a.flac"}]
     second_scan_response = Mock()
     second_scan_response.json.return_value = second_scan
     import_wait_response = Mock()
@@ -297,7 +363,9 @@ def test_import_folder_clears_stale_trackfile_and_retries() -> None:
         patch("requests.delete", return_value=Mock()) as delete,
         patch("requests.post", return_value=import_post_response),
     ):
-        imported, skipped, skipped_names = lidarr.import_folder("http://localhost:8686", "key", Path("/music"))
+        imported, skipped, skipped_names = lidarr.import_folder(
+            "http://localhost:8686", "key", Path("/music"), local_root=str(tmp_path), lidarr_root="/music"
+        )
 
     assert imported == 1
     assert skipped == 0

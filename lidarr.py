@@ -17,6 +17,14 @@ replaced (e.g. a FLAC it converted to MP3 and deleted), the existing
 TrackFile record is deleted via DELETE /api/v1/trackfile/{id} so the
 replacement isn't blocked by a stale "already has file" rejection; then
 POST /api/v1/command queues the actual import.
+
+CAUTION: DELETE /api/v1/trackfile deletes the actual file on disk, not
+just the database row. clear_stale_trackfiles() only ever deletes a
+record after confirming (via a real filesystem check, honoring
+local_root/lidarr_root) that its file is actually gone - never a blanket
+sweep of "every record for this album". Do not bypass that check by
+calling delete_trackfile() directly on a record without first confirming
+the same thing yourself.
 """
 
 from __future__ import annotations
@@ -77,6 +85,20 @@ def remap_path_to_lidarr(folder: Path, local_root: str, lidarr_root: str) -> str
     except ValueError:
         return str(folder)
     return str(PurePosixPath(lidarr_root, *relative.parts))
+
+
+def lidarr_path_to_local(path: str, local_root: str, lidarr_root: str) -> Path:
+    """Inverse of remap_path_to_lidarr: rewrite a path Lidarr reports back
+    into this machine's view, so callers can check whether the underlying
+    file genuinely still exists before deleting anything. No-op (returned
+    as-is) if either root is blank, or `path` isn't under `lidarr_root`."""
+    if not local_root or not lidarr_root:
+        return Path(path)
+    try:
+        relative = PurePosixPath(path).relative_to(lidarr_root)
+    except ValueError:
+        return Path(path)
+    return Path(local_root, *relative.parts)
 
 
 def get_manual_import_candidates(base_url: str, api_key: str, folder: Path | str) -> list[dict[str, Any]]:
@@ -198,6 +220,11 @@ def get_album_trackfiles(base_url: str, api_key: str, album_id: int) -> list[dic
 
 
 def delete_trackfile(base_url: str, api_key: str, trackfile_id: int) -> None:
+    """DELETEs the file on disk, not just the database record - Lidarr
+    treats removing a TrackFile as "delete this file". Never call this for
+    a record whose file might still be the one you want to keep; see
+    clear_stale_trackfiles for the safe, existence-checked way to remove
+    only genuinely orphaned records."""
     try:
         response = requests.delete(
             _url(base_url, f"/api/v1/trackfile/{trackfile_id}"), headers=_headers(api_key), timeout=REQUEST_TIMEOUT
@@ -207,15 +234,37 @@ def delete_trackfile(base_url: str, api_key: str, trackfile_id: int) -> None:
         raise LidarrError(f"Failed to delete stale track file {trackfile_id}: {exc}") from exc
 
 
-def clear_stale_trackfiles(base_url: str, api_key: str, album_id: int) -> int:
-    """Delete every existing TrackFile record for `album_id`, so a
-    replacement (e.g. this tool's MP3 after deleting the FLAC it was
-    converted from) isn't rejected as "already has file" against a record
-    Lidarr hasn't otherwise reconciled. Returns how many were deleted."""
+def clear_stale_trackfiles(
+    base_url: str, api_key: str, album_id: int, local_root: str = "", lidarr_root: str = ""
+) -> int:
+    """Delete only the TrackFile records for `album_id` whose file is
+    genuinely gone from disk - never a blanket "clear the album" sweep.
+
+    DELETE /api/v1/trackfile removes the actual file, not just the
+    database row, so deleting a record for a file that's still there
+    would destroy real data. For each record, this checks (via
+    lidarr_path_to_local) whether the file still exists locally, and
+    additionally requires the file's *parent directory* to exist too -
+    if we can't even see the containing folder, this machine likely isn't
+    looking at the same filesystem Lidarr is (e.g. local_root/lidarr_root
+    aren't configured for a cross-host setup), and guessing "stale" in
+    that case previously deleted files that were still very much in use.
+    When in doubt, a record is left alone: a leftover stale record can
+    always be cleared on a later, correctly-configured run, but a wrongly
+    deleted file cannot be undone.
+
+    Returns how many genuinely stale records were deleted."""
     trackfiles = get_album_trackfiles(base_url, api_key, album_id)
+    deleted = 0
     for trackfile in trackfiles:
+        local_path = lidarr_path_to_local(trackfile["path"], local_root, lidarr_root)
+        if not local_path.parent.is_dir():
+            continue
+        if local_path.exists():
+            continue
         delete_trackfile(base_url, api_key, trackfile["id"])
-    return len(trackfiles)
+        deleted += 1
+    return deleted
 
 
 def wait_for_command(
@@ -270,7 +319,7 @@ def import_folder(
     stale_album_ids = {c["album"]["id"] for c in candidates if has_existing_file_rejection(c)}
     if stale_album_ids:
         for album_id in stale_album_ids:
-            clear_stale_trackfiles(base_url, api_key, album_id)
+            clear_stale_trackfiles(base_url, api_key, album_id, local_root, lidarr_root)
         candidates = get_manual_import_candidates(base_url, api_key, lidarr_folder)
 
     matched = [c for c in candidates if is_fully_matched(c)]

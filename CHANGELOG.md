@@ -12,6 +12,19 @@ All notable changes to this project are documented in this file.
   prefix changed from `flac2mp3-` to `acoustid-convert-`.
 
 ### Fixed
+- **Important**: `clear_stale_trackfiles()` deleted *every* TrackFile
+  record for an album whose scan hit an "already has file" rejection,
+  not just the genuinely stale ones. `DELETE /api/v1/trackfile` removes
+  the actual file on disk, not just the database row - so on a real
+  Lidarr instance this deleted a valid, just-imported MP3 alongside the
+  actually-stale records for files this tool had deleted during
+  conversion. It now only deletes a record after confirming, via a real
+  filesystem check (honoring the local/Lidarr path mapping), that its
+  file is genuinely gone - and requires being able to see the file's
+  containing folder at all, so a misconfigured/cross-host path mapping
+  can never make it wrongly conclude every file is "missing". When in
+  doubt, a record is now left alone rather than deleted: a leftover stale
+  record is recoverable on a later run; a wrongly deleted file is not.
 - `submit_manual_import()` was forwarding Lidarr's raw manual-import scan
   result (which nests `artist`/`album`/`tracks` as full objects, for
   display) straight into the `POST /api/v1/command` ManualImport payload.

@@ -99,7 +99,13 @@ In the window:
   Lidarr's API and the scan is retried once before giving up - the same
   fix used by the proven
   [TheCaptain989/lidarr-flac2mp3](https://github.com/TheCaptain989/lidarr-flac2mp3)
-  script, rather than a blanket library rescan.
+  script, rather than a blanket library rescan. **Note**: `DELETE
+  /api/v1/trackfile` removes the actual file, not just the database row,
+  so this only ever deletes a record after confirming (via a real
+  filesystem check) that its file is genuinely gone - never every record
+  for the album. This is exactly why getting the path mapping right
+  (above) matters: without it, this check can't tell a missing file from
+  one it simply can't see.
 - Lidarr reads the files' own embedded tags to propose matches. Since
   this tool preserves full MusicBrainz/AcoustID tags through conversion,
   well-tagged files are usually auto-matched with no input needed.
