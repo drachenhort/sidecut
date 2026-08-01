@@ -11,6 +11,14 @@ All notable changes to this project are documented in this file.
   "flac2mp3" identifier are not carried over), and the conversion log
   prefix changed from `flac2mp3-` to `acoustid-convert-`.
 
+### Added
+- New **Auto-import to Lidarr after conversion** checkbox: when Start
+  finishes converting at least one file, automatically runs the same
+  Lidarr import as the existing button - no extra click needed. Off by
+  default; only fires after a real conversion, and silently does nothing
+  if the Lidarr URL/API key aren't configured yet (rather than an error
+  dialog for a checkbox left on before setup was finished).
+
 ### Fixed
 - **Important**: `clear_stale_trackfiles()` deleted *every* TrackFile
   record for an album whose scan hit an "already has file" rejection,

@@ -427,6 +427,18 @@ class MainWindow(QMainWindow):
     def _build_lidarr_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
 
+        self.lidarr_autoimport_checkbox = QCheckBox("Auto-import to Lidarr after conversion")
+        self.lidarr_autoimport_checkbox.setToolTip(
+            "When Start finishes converting at least one file, automatically run the same\n"
+            "thing Import to Lidarr does - no extra click needed. Off by default. Only runs\n"
+            "after a real conversion (not a Check AcoustID Only/+MP3 run), and only if a URL\n"
+            "and API key are set in Lidarr Settings...; otherwise it's silently skipped."
+        )
+        self.lidarr_autoimport_checkbox.setChecked(self.settings.value("lidarr_autoimport", False, type=bool))
+        self.lidarr_autoimport_checkbox.toggled.connect(
+            lambda checked: self.settings.setValue("lidarr_autoimport", checked)
+        )
+
         lidarr_settings_button = QPushButton("Lidarr Settings...")
         lidarr_settings_button.clicked.connect(self._open_lidarr_settings)
 
@@ -443,6 +455,7 @@ class MainWindow(QMainWindow):
         self.lidarr_import_button.setEnabled(False)
         self.lidarr_import_button.clicked.connect(self._start_lidarr_import)
 
+        row.addWidget(self.lidarr_autoimport_checkbox)
         row.addStretch(1)
         row.addWidget(lidarr_settings_button)
         row.addWidget(self.lidarr_import_button)
@@ -563,6 +576,18 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"Lidarr import failed: {message}")
         QMessageBox.critical(self, "Lidarr import failed", message)
 
+    def _maybe_autoimport_to_lidarr(self) -> None:
+        """Called after a real conversion finishes. Unlike the manual
+        Import to Lidarr button, an unconfigured URL/key here is not an
+        error worth interrupting the user over - they just haven't set up
+        Lidarr, or don't want auto-import right now despite the checkbox;
+        silently do nothing rather than popping a dialog."""
+        if not self.lidarr_autoimport_checkbox.isChecked():
+            return
+        if not self.settings.value("lidarr_url", "") or not self.settings.value("lidarr_api_key", ""):
+            return
+        self._start_lidarr_import()
+
     def _run_batch(
         self, files: list[Path], acoustid_apikey: str | None, acoustid_only: bool, log_prefix: str
     ) -> None:
@@ -662,6 +687,7 @@ class MainWindow(QMainWindow):
                 f"After:  {_format_bytes(dst_bytes)}\n"
                 f"Saved:  {_format_bytes(saved)} ({percent:.0f}%)",
             )
+            self._maybe_autoimport_to_lidarr()
 
     def _on_batch_error(self, message: str) -> None:
         self.start_button.setEnabled(bool(self.files))

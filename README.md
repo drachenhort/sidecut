@@ -78,6 +78,14 @@ In the window:
   confirm they're correct (host/port reachable, key accepted) before
   relying on them. Then click **Import to Lidarr** to hand the current
   folder to Lidarr, instead of using Lidarr's own import UI.
+- Tick **Auto-import to Lidarr after conversion** to skip that manual
+  click: whenever **Start** finishes converting at least one file, the
+  same import runs automatically right after. Off by default. It only
+  runs after a real conversion (never after Check AcoustID Only/+MP3,
+  which are meant to leave files untouched), and only if a URL/API key
+  are already set - if they're not, it's silently skipped rather than
+  popping up an error, since ticking the checkbox without finishing setup
+  isn't a mistake worth interrupting you over.
 - If this app sees the library at a different path than Lidarr does (e.g.
   Lidarr runs in a container or on another host, and the same share is
   mounted under a different path here), also set **Local path to
