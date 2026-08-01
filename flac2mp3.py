@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import QSettings, Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -91,6 +91,7 @@ class MainWindow(QMainWindow):
 
         self.files: list[Path] = []
         self.converter: BatchConverter | None = None
+        self.settings = QSettings("flac2mp3", "flac2mp3")
 
         self._build_ui()
         if initial_folder is not None:
@@ -134,6 +135,12 @@ class MainWindow(QMainWindow):
         self.quality_combo = QComboBox()
         for key, label in core.QUALITY_LABELS.items():
             self.quality_combo.addItem(label, userData=key)
+        last_quality = self.settings.value("quality")
+        if last_quality is not None:
+            index = self.quality_combo.findData(last_quality)
+            if index != -1:
+                self.quality_combo.setCurrentIndex(index)
+        self.quality_combo.currentIndexChanged.connect(self._save_quality_setting)
 
         self.workers_spin = QSpinBox()
         self.workers_spin.setRange(1, max(1, (os.cpu_count() or 4) * 2))
@@ -155,6 +162,9 @@ class MainWindow(QMainWindow):
         row.addWidget(self.start_button)
         row.addWidget(self.cancel_button)
         return row
+
+    def _save_quality_setting(self) -> None:
+        self.settings.setValue("quality", self.quality_combo.currentData())
 
     def _browse_folder(self) -> None:
         start_dir = self.folder_edit.text() or str(Path.home())
