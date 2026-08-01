@@ -47,6 +47,8 @@ class ConversionResult:
     source: Path
     ok: bool
     message: str = ""
+    src_bytes: int = 0
+    dst_bytes: int = 0
 
 
 @dataclass
@@ -159,6 +161,7 @@ def convert_one(
     should_cancel: Callable[[], bool] | None = None,
 ) -> ConversionResult:
     dst = src.with_suffix(".mp3")
+    src_bytes = src.stat().st_size
     duration = track_duration(src)
     ok = run_ffmpeg(src, dst, quality_args, log, duration, on_progress, should_cancel)
     ok = ok and dst.is_file() and dst.stat().st_size > 0
@@ -171,8 +174,9 @@ def convert_one(
             log.write(f"tag copy failed for {src}: {exc}\n")
 
     if ok:
+        dst_bytes = dst.stat().st_size
         src.unlink()
-        return ConversionResult(src, True)
+        return ConversionResult(src, True, src_bytes=src_bytes, dst_bytes=dst_bytes)
 
     dst.unlink(missing_ok=True)
     if should_cancel is not None and should_cancel():

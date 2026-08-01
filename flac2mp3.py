@@ -36,11 +36,20 @@ import core
 STATUS_COLUMN_LABELS = {"pending": "Pending", "running": "Converting...", "ok": "Done", "fail": "Failed"}
 
 
+def _format_bytes(num_bytes: int) -> str:
+    size = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} GB"
+
+
 class BatchConverter(QThread):
     file_started = Signal(int)
     file_progress = Signal(int, float, str)
     file_finished = Signal(int, bool)
-    batch_finished = Signal(int, int, str)
+    batch_finished = Signal(int, int, str, int, int)
 
     def __init__(self, files: list[Path], quality: str, log_path: Path, workers: int) -> None:
         super().__init__()
@@ -69,7 +78,9 @@ class BatchConverter(QThread):
 
         ok_count = sum(r.ok for r in results)
         fail_count = len(results) - ok_count
-        self.batch_finished.emit(ok_count, fail_count, str(self.log_path))
+        src_bytes = sum(r.src_bytes for r in results if r.ok)
+        dst_bytes = sum(r.dst_bytes for r in results if r.ok)
+        self.batch_finished.emit(ok_count, fail_count, str(self.log_path), src_bytes, dst_bytes)
 
 
 class MainWindow(QMainWindow):
@@ -208,7 +219,9 @@ class MainWindow(QMainWindow):
         self._completed += 1
         self.overall_bar.setValue(self._completed)
 
-    def _on_batch_finished(self, ok_count: int, fail_count: int, log_path: str) -> None:
+    def _on_batch_finished(
+        self, ok_count: int, fail_count: int, log_path: str, src_bytes: int, dst_bytes: int
+    ) -> None:
         # Leave the table as-is (per-file Done/Failed results) so the run can
         # be reviewed; Browse a folder again to start a new batch. Start
         # stays disabled since self.files now points at already-converted
@@ -216,6 +229,18 @@ class MainWindow(QMainWindow):
         self.start_button.setEnabled(False)
         self.cancel_button.setEnabled(False)
         self.status_label.setText(f"Converted: {ok_count}  Failed: {fail_count}  Log: {log_path}")
+
+        if ok_count:
+            saved = src_bytes - dst_bytes
+            percent = (saved / src_bytes * 100) if src_bytes else 0.0
+            QMessageBox.information(
+                self,
+                "Conversion complete",
+                f"Converted {ok_count} file(s) ({fail_count} failed)\n\n"
+                f"Before: {_format_bytes(src_bytes)}\n"
+                f"After:  {_format_bytes(dst_bytes)}\n"
+                f"Saved:  {_format_bytes(saved)} ({percent:.0f}%)",
+            )
 
 
 def main() -> None:
