@@ -70,6 +70,29 @@ In the window:
 - The API key is saved between runs (Qt `QSettings`); get one for free at
   [acoustid.org](https://acoustid.org/).
 
+## Lidarr import (optional)
+
+- Entirely separate feature, off by default: enter your Lidarr **URL**
+  (e.g. `http://localhost:8686`) and **API key** (Lidarr's Settings >
+  General) and click **Import to Lidarr** to hand the current folder to
+  Lidarr, instead of using Lidarr's own import UI.
+- This does **not** write to Lidarr's database directly - that's an
+  unsupported, version-fragile approach that can race with Lidarr's own
+  in-memory state. Instead it drives Lidarr's **Manual Import API**: the
+  same matching logic behind Lidarr's Manual Import screen, just called
+  as an HTTP command instead of clicked through by hand.
+- Lidarr reads the files' own embedded tags to propose matches. Since
+  this tool preserves full MusicBrainz/AcoustID tags through conversion,
+  well-tagged files are usually auto-matched with no input needed.
+- Only files Lidarr fully auto-matches (artist, album, and track, with no
+  unresolved rejections) are submitted for import; anything it can't
+  match is left completely alone and listed in the result so you can
+  still import it by hand in Lidarr if needed.
+- Runs in the background and is independent of everything else in the
+  window - it doesn't require or interact with Start, Check AcoustID, or
+  the file table, and can be used on its own at any time a folder is
+  selected (e.g. right after a conversion finishes).
+
 ## Behavior
 
 - Scans recursively for `*.flac` (case-insensitive).
@@ -94,6 +117,8 @@ In the window:
 
 - `core.py` — framework-agnostic conversion logic (scanning, ffmpeg
   invocation, tag/picture copying); no Qt dependency, directly unit tested.
+- `lidarr.py` — the optional Lidarr Manual Import API client; no Qt
+  dependency, directly unit tested.
 - `acoustid.py` — the PySide6 window and its background conversion thread.
 
 ## Tests

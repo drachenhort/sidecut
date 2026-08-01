@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 import core
+import lidarr
 
 __version__ = "0.4"
 
@@ -152,6 +153,29 @@ class BatchConverter(QThread):
         self.batch_finished.emit(ok_count, fail_count, str(self.log_path), src_bytes, dst_bytes)
 
 
+class LidarrImportWorker(QThread):
+    """Hands a folder to Lidarr's Manual Import API in the background so the
+    UI doesn't block on the network round-trip. Entirely independent of
+    BatchConverter/self.files - it just tells Lidarr which folder to scan."""
+
+    import_finished = Signal(int, int, str)  # imported_count, skipped_count, "; "-joined skipped names
+    import_error = Signal(str)
+
+    def __init__(self, base_url: str, api_key: str, folder: Path) -> None:
+        super().__init__()
+        self.base_url = base_url
+        self.api_key = api_key
+        self.folder = folder
+
+    def run(self) -> None:
+        try:
+            imported, skipped, skipped_names = lidarr.import_folder(self.base_url, self.api_key, self.folder)
+        except lidarr.LidarrError as exc:
+            self.import_error.emit(str(exc))
+            return
+        self.import_finished.emit(imported, skipped, "; ".join(skipped_names))
+
+
 class MainWindow(QMainWindow):
     def __init__(self, initial_folder: Path | None = None) -> None:
         super().__init__()
@@ -160,6 +184,7 @@ class MainWindow(QMainWindow):
 
         self.files: list[Path] = []
         self.converter: BatchConverter | None = None
+        self.lidarr_worker: LidarrImportWorker | None = None
         self.settings = QSettings("AcoustID", "AcoustID")
         self._acoustid_only_run = False
 
@@ -176,6 +201,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(self._build_folder_row())
         layout.addLayout(self._build_options_row())
         layout.addLayout(self._build_acoustid_row())
+        layout.addLayout(self._build_lidarr_row())
 
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["File", "Status", "Progress", "AcoustID"])
@@ -288,6 +314,40 @@ class MainWindow(QMainWindow):
         self.settings.setValue("acoustid_api_key", self.acoustid_key_edit.text().strip())
         self.settings.setValue("acoustid_autocorrect", self.acoustid_autocorrect_checkbox.isChecked())
 
+    def _build_lidarr_row(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+
+        self.lidarr_url_edit = QLineEdit()
+        self.lidarr_url_edit.setPlaceholderText("Lidarr URL (e.g. http://localhost:8686)")
+        self.lidarr_url_edit.setText(self.settings.value("lidarr_url", ""))
+        self.lidarr_url_edit.editingFinished.connect(self._save_lidarr_settings)
+
+        self.lidarr_key_edit = QLineEdit()
+        self.lidarr_key_edit.setPlaceholderText("Lidarr API key (Settings > General)")
+        self.lidarr_key_edit.setText(self.settings.value("lidarr_api_key", ""))
+        self.lidarr_key_edit.editingFinished.connect(self._save_lidarr_settings)
+
+        self.lidarr_import_button = QPushButton("Import to Lidarr")
+        self.lidarr_import_button.setToolTip(
+            "Entirely optional and independent of everything else in this window: hands the\n"
+            "current folder to Lidarr's own Manual Import API (the same logic behind its\n"
+            "Manual Import screen), so Lidarr matches, moves, and renames files itself\n"
+            "instead of a direct database write. Only files Lidarr can fully auto-match\n"
+            "(from embedded tags) are imported; anything it can't match is left alone and\n"
+            "reported back, not touched."
+        )
+        self.lidarr_import_button.setEnabled(False)
+        self.lidarr_import_button.clicked.connect(self._start_lidarr_import)
+
+        row.addWidget(self.lidarr_url_edit, stretch=1)
+        row.addWidget(self.lidarr_key_edit, stretch=1)
+        row.addWidget(self.lidarr_import_button)
+        return row
+
+    def _save_lidarr_settings(self) -> None:
+        self.settings.setValue("lidarr_url", self.lidarr_url_edit.text().strip())
+        self.settings.setValue("lidarr_api_key", self.lidarr_key_edit.text().strip())
+
     def _save_quality_setting(self) -> None:
         self.settings.setValue("quality", self.quality_combo.currentData())
 
@@ -311,6 +371,7 @@ class MainWindow(QMainWindow):
         self.start_button.setEnabled(bool(self.files))
         self.checkonly_button.setEnabled(bool(self.files))
         self.checkonly_mp3_button.setEnabled(True)
+        self.lidarr_import_button.setEnabled(True)
         if self.files:
             self.status_label.setText(f"{len(self.files)} FLAC file(s) found under {folder}")
         else:
@@ -365,6 +426,35 @@ class MainWindow(QMainWindow):
         # listing) is scoped to this button only, so Start and Check
         # AcoustID Only keep targeting the folder's FLAC files afterwards.
         self._run_batch(files, acoustid_apikey, acoustid_only=True, log_prefix="acoustid-check-mp3")
+
+    def _start_lidarr_import(self) -> None:
+        base_url = self.lidarr_url_edit.text().strip()
+        api_key = self.lidarr_key_edit.text().strip()
+        if not base_url or not api_key:
+            QMessageBox.critical(self, "AcoustID", "Importing to Lidarr needs both a URL and an API key.")
+            return
+
+        folder = Path(self.folder_edit.text())
+        self.lidarr_import_button.setEnabled(False)
+        self.status_label.setText(f"Handing {folder} to Lidarr's Manual Import API...")
+
+        self.lidarr_worker = LidarrImportWorker(base_url, api_key, folder)
+        self.lidarr_worker.import_finished.connect(self._on_lidarr_import_finished)
+        self.lidarr_worker.import_error.connect(self._on_lidarr_import_error)
+        self.lidarr_worker.start()
+
+    def _on_lidarr_import_finished(self, imported: int, skipped: int, skipped_names: str) -> None:
+        self.lidarr_import_button.setEnabled(True)
+        self.status_label.setText(f"Lidarr import: {imported} imported, {skipped} skipped")
+        message = f"Lidarr imported {imported} file(s)."
+        if skipped:
+            message += f"\n\n{skipped} file(s) Lidarr couldn't auto-match were left untouched:\n{skipped_names}"
+        QMessageBox.information(self, "Lidarr import", message)
+
+    def _on_lidarr_import_error(self, message: str) -> None:
+        self.lidarr_import_button.setEnabled(True)
+        self.status_label.setText(f"Lidarr import failed: {message}")
+        QMessageBox.critical(self, "Lidarr import failed", message)
 
     def _run_batch(
         self, files: list[Path], acoustid_apikey: str | None, acoustid_only: bool, log_prefix: str

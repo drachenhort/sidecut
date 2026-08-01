@@ -12,6 +12,13 @@ All notable changes to this project are documented in this file.
   prefix changed from `flac2mp3-` to `acoustid-convert-`.
 
 ### Added
+- New **Import to Lidarr** button (optional, off by default, entirely
+  independent of everything else in the window): hands the current folder
+  to Lidarr's own Manual Import API instead of writing to Lidarr's
+  database directly or requiring its import UI. New `lidarr.py` module
+  wraps the API (scan a folder for matches, submit the fully-matched
+  ones, poll until the import command finishes); files Lidarr can't
+  auto-match from embedded tags are left untouched and reported back.
 - The last folder opened (via **Browse...** or on the command line) is
   now remembered between runs and reopened automatically on launch.
 - New **Check AcoustID (incl. MP3)** button: rescans the folder for both
