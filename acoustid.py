@@ -7,12 +7,15 @@ from __future__ import annotations
 import os
 import sys
 import threading
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import TextIO
 
+from PySide6.QtCharts import QBarCategoryAxis, QBarSet, QChart, QChartView, QHorizontalBarSeries, QValueAxis
 from PySide6.QtCore import QSettings, Qt, QThread, Signal
+from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -41,6 +44,7 @@ from PySide6.QtWidgets import (
 import core
 import lidarr
 import lidarr_hook
+import library_stats
 
 __version__ = "0.4"
 
@@ -286,6 +290,78 @@ class LidarrSettingsDialog(QDialog):
         super().accept()
 
 
+class LibraryStatsWorker(QThread):
+    """Runs library_stats.scan_release_types() off the UI thread, since
+    walking and tag-reading a whole library can take a while."""
+
+    scan_finished = Signal(object)  # Counter[str]
+    scan_error = Signal(str)
+
+    def __init__(self, folder: Path) -> None:
+        super().__init__()
+        self.folder = folder
+
+    def run(self) -> None:
+        try:
+            counts = library_stats.scan_release_types(self.folder)
+        except Exception as exc:  # noqa: BLE001 - report to the UI, don't die silently
+            self.scan_error.emit(str(exc))
+            return
+        self.scan_finished.emit(counts)
+
+
+class LibraryStatsWindow(QDialog):
+    """Standalone, non-modal window showing a horizontal bar chart of
+    release-type counts (Album, EP, Single, Compilation, ...), most
+    common first - reads better than a pie chart once there are more
+    than a handful of categories, since exact magnitudes and a long tail
+    of small categories are both easy to read off a shared axis."""
+
+    def __init__(self, counts: Counter[str], folder: Path, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Collection Summary")
+        self.resize(720, 480)
+
+        layout = QVBoxLayout(self)
+        total = sum(counts.values())
+        header = QLabel(f"<b>{total}</b> release(s) found under {folder}")
+        header.setWordWrap(True)
+        layout.addWidget(header)
+
+        if not counts:
+            layout.addWidget(QLabel("No albums/EPs/singles with readable audio files were found."))
+            return
+
+        ordered = counts.most_common()  # descending by count
+
+        bar_set = QBarSet("Releases")
+        bar_set.append([count for _, count in ordered])
+
+        series = QHorizontalBarSeries()
+        series.append(bar_set)
+        series.setLabelsVisible(True)
+
+        chart = QChart()
+        chart.addSeries(series)
+        chart.setTitle("Release types, most common first")
+        chart.legend().setVisible(False)
+
+        axis_y = QBarCategoryAxis()
+        axis_y.append([f"{label} ({count})" for label, count in ordered])
+        chart.addAxis(axis_y, Qt.AlignLeft)
+        series.attachAxis(axis_y)
+
+        axis_x = QValueAxis()
+        axis_x.setLabelFormat("%d")
+        axis_x.setRange(0, ordered[0][1])
+        chart.addAxis(axis_x, Qt.AlignBottom)
+        series.attachAxis(axis_x)
+
+        chart_view = QChartView(chart)
+        chart_view.setRenderHint(QPainter.Antialiasing)
+        layout.addWidget(chart_view)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, initial_folder: Path | None = None) -> None:
         super().__init__()
@@ -295,6 +371,8 @@ class MainWindow(QMainWindow):
         self.files: list[Path] = []
         self.converter: BatchConverter | None = None
         self.lidarr_worker: LidarrImportWorker | None = None
+        self.library_stats_worker: LibraryStatsWorker | None = None
+        self.library_stats_window: LibraryStatsWindow | None = None
         self.settings = QSettings("AcoustID", "AcoustID")
         self._acoustid_only_run = False
 
@@ -332,9 +410,20 @@ class MainWindow(QMainWindow):
         self.folder_edit.setReadOnly(True)
         browse_button = QPushButton("Browse...")
         browse_button.clicked.connect(self._browse_folder)
+
+        self.library_stats_button = QPushButton("Collection Summary")
+        self.library_stats_button.setToolTip(
+            "Scans this folder recursively (read-only, nothing is modified) and tallies\n"
+            "release types (Album, EP, Single, Compilation, Promo, ...) from each release's\n"
+            "own tags, showing the result as a bar chart in its own window."
+        )
+        self.library_stats_button.setEnabled(False)
+        self.library_stats_button.clicked.connect(self._start_library_stats_scan)
+
         row.addWidget(QLabel("Folder:"))
         row.addWidget(self.folder_edit, stretch=1)
         row.addWidget(browse_button)
+        row.addWidget(self.library_stats_button)
         return row
 
     def _build_options_row(self) -> QHBoxLayout:
@@ -488,6 +577,7 @@ class MainWindow(QMainWindow):
         self.checkonly_button.setEnabled(bool(self.files))
         self.checkonly_mp3_button.setEnabled(True)
         self.lidarr_import_button.setEnabled(True)
+        self.library_stats_button.setEnabled(True)
         if self.files:
             self.status_label.setText(f"{len(self.files)} FLAC file(s) found under {folder}")
         else:
@@ -575,6 +665,29 @@ class MainWindow(QMainWindow):
         self.lidarr_import_button.setEnabled(True)
         self.status_label.setText(f"Lidarr import failed: {message}")
         QMessageBox.critical(self, "Lidarr import failed", message)
+
+    def _start_library_stats_scan(self) -> None:
+        folder = Path(self.folder_edit.text())
+        self.library_stats_button.setEnabled(False)
+        self.status_label.setText(f"Scanning {folder} for release types...")
+
+        self.library_stats_worker = LibraryStatsWorker(folder)
+        self.library_stats_worker.scan_finished.connect(self._on_library_stats_finished)
+        self.library_stats_worker.scan_error.connect(self._on_library_stats_error)
+        self.library_stats_worker.start()
+
+    def _on_library_stats_finished(self, counts: Counter[str]) -> None:
+        self.library_stats_button.setEnabled(True)
+        total = sum(counts.values())
+        self.status_label.setText(f"Collection summary: {total} release(s)")
+        folder = Path(self.folder_edit.text())
+        self.library_stats_window = LibraryStatsWindow(counts, folder, self)
+        self.library_stats_window.show()
+
+    def _on_library_stats_error(self, message: str) -> None:
+        self.library_stats_button.setEnabled(True)
+        self.status_label.setText(f"Collection summary failed: {message}")
+        QMessageBox.critical(self, "AcoustID", message)
 
     def _maybe_autoimport_to_lidarr(self) -> None:
         """Called after a real conversion finishes. Unlike the manual

@@ -26,6 +26,8 @@ In the window:
 1. **Browse...** to pick the folder to scan recursively (native KDE folder
    dialog). The chosen folder is remembered (Qt `QSettings`) and reopened
    automatically next time, unless a folder is passed on the command line.
+   **Collection Summary** (next to Browse) is unrelated to conversion -
+   see below.
 2. Choose a **quality** preset and the number of **parallel jobs**.
 3. Optionally tick **Check AcoustID** and enter an AcoustID API key to
    fingerprint each file and compare it against MusicBrainz before
@@ -204,6 +206,22 @@ lidarr_eventtype=Test /full/path/to/acoustid.py
 
 See `lidarr_hook.py` for the implementation.
 
+## Collection Summary (optional)
+
+- Click **Collection Summary** (next to Browse) to scan the current
+  folder recursively - read-only, nothing is converted or modified - and
+  see a breakdown of your collection by release type (Album, EP, Single,
+  Compilation, Promo, Live, ...) in its own window, as a horizontal bar
+  chart (most common type first) plus a total release count.
+- Every directory that directly contains audio files is counted as one
+  release; its type is read from the `releasetype` tag (FLAC) or the
+  "MusicBrainz Album Type" frame (MP3, as this tool's own conversion
+  writes it) on one file in that directory, since release type is an
+  album-level property shared by every track in it. A release with no
+  such tag is counted as **Unknown**.
+- Runs in the background (`library_stats.py`) so the window doesn't
+  freeze while scanning a large library.
+
 ## Behavior
 
 - Scans recursively for `*.flac` (case-insensitive).
@@ -233,6 +251,8 @@ See `lidarr_hook.py` for the implementation.
 - `lidarr_hook.py` — headless entry point for running as a Lidarr Custom
   Script (reads `lidarr_*` env vars, converts, calls `lidarr.py`); no Qt
   widgets, directly unit tested.
+- `library_stats.py` — release-type scanning for Collection Summary; no
+  Qt dependency, directly unit tested.
 - `acoustid.py` — the PySide6 window and its background conversion
   thread; `main()` dispatches to `lidarr_hook` before touching Qt if
   invoked as a Lidarr Custom Script.

@@ -12,6 +12,18 @@ All notable changes to this project are documented in this file.
   prefix changed from `flac2mp3-` to `acoustid-convert-`.
 
 ### Added
+- New **Collection Summary** button (next to Browse): scans the current
+  folder recursively, read-only, and shows a breakdown of the collection
+  by release type (Album, EP, Single, Compilation, Promo, ...) - a
+  horizontal bar chart (most common first) plus a total release count -
+  in its own window. Chosen over a pie chart since it reads better with
+  more than a handful of categories and a long tail of small ones. New
+  `library_stats.py` module reads the `releasetype`/"MusicBrainz Album
+  Type" tag from one file per directory (release type is an album-level
+  property); untagged releases are counted as `Unknown`. Uses
+  `PySide6.QtCharts`, already bundled with the existing `PySide6`
+  dependency - no new package required. Runs in the background so
+  scanning a large library doesn't freeze the window.
 - All Lidarr API calls now retry automatically (`RETRY_ATTEMPTS`, with
   backoff) on connection errors, timeouts, and 5xx server errors, via a
   new `_with_retry()` wrapper - prompted by a real `Failed to delete
