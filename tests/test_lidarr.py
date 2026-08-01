@@ -43,6 +43,22 @@ def test_get_manual_import_candidates_passes_folder_and_returns_json() -> None:
     assert get.call_args.kwargs["params"]["folder"] == "/music"
 
 
+def test_remap_path_to_lidarr_rewrites_matching_prefix() -> None:
+    result = lidarr.remap_path_to_lidarr(Path("/home/user/Music/Artist/Album"), "/home/user/Music", "/music")
+    assert result == "/music/Artist/Album"
+
+
+def test_remap_path_to_lidarr_leaves_path_unchanged_when_roots_blank() -> None:
+    path = Path("/home/user/Music/Artist/Album")
+    assert lidarr.remap_path_to_lidarr(path, "", "/music") == str(path)
+    assert lidarr.remap_path_to_lidarr(path, "/home/user/Music", "") == str(path)
+
+
+def test_remap_path_to_lidarr_leaves_path_unchanged_when_not_under_local_root() -> None:
+    path = Path("/somewhere/else/Artist")
+    assert lidarr.remap_path_to_lidarr(path, "/home/user/Music", "/music") == str(path)
+
+
 def test_is_fully_matched() -> None:
     matched = {"artist": {"id": 1}, "album": {"id": 2}, "tracks": [{"id": 3}], "rejections": []}
     assert lidarr.is_fully_matched(matched) is True
@@ -135,6 +151,22 @@ def test_clear_stale_trackfiles_deletes_each_one() -> None:
     assert count == 2
     deleted_ids = sorted(call.args[0].rsplit("/", 1)[-1] for call in delete.call_args_list)
     assert deleted_ids == ["1", "2"]
+
+
+def test_import_folder_remaps_folder_to_lidarrs_path_before_scanning() -> None:
+    candidates_response = Mock()
+    candidates_response.json.return_value = []
+
+    with patch("requests.get", return_value=candidates_response) as get:
+        lidarr.import_folder(
+            "http://localhost:8686",
+            "key",
+            Path("/home/user/Music/Artist"),
+            local_root="/home/user/Music",
+            lidarr_root="/music",
+        )
+
+    assert get.call_args.kwargs["params"]["folder"] == "/music/Artist"
 
 
 def test_import_folder_only_submits_matched_candidates() -> None:

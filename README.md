@@ -78,6 +78,16 @@ In the window:
   confirm they're correct (host/port reachable, key accepted) before
   relying on them. Then click **Import to Lidarr** to hand the current
   folder to Lidarr, instead of using Lidarr's own import UI.
+- If this app sees the library at a different path than Lidarr does (e.g.
+  Lidarr runs in a container or on another host, and the same share is
+  mounted under a different path here), also set **Local path to
+  library** and **Same path inside Lidarr** in Lidarr Settings... - e.g.
+  `/home/user/Music` and `/music`. Without this, Lidarr's manual-import
+  scan will silently find nothing, since it can only look things up under
+  its own filesystem view. Check an artist's `path` in Lidarr (via its
+  UI, or `GET /api/v1/artist`) if you're not sure what Lidarr's side
+  should be. Leave both blank if this app and Lidarr already agree on
+  paths.
 - This does **not** write to Lidarr's database directly - that's an
   unsupported, version-fragile approach that can race with Lidarr's own
   in-memory state. Instead it drives Lidarr's **Manual Import API**: the

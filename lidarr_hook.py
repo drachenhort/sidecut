@@ -103,8 +103,12 @@ def run_from_environment(settings: QSettings | None = None) -> int:
         )
         return 0 if ok_count == len(flac_paths) else 1
 
+    local_root = settings.value("lidarr_local_root", "")
+    lidarr_root = settings.value("lidarr_root", "")
     try:
-        imported, skipped, skipped_names = lidarr.import_folder(lidarr_url, api_key, folder)
+        imported, skipped, skipped_names = lidarr.import_folder(
+            lidarr_url, api_key, folder, local_root=local_root, lidarr_root=lidarr_root
+        )
     except lidarr.LidarrError as exc:
         print(f"Lidarr import failed: {exc}", file=sys.stderr)
         return 1

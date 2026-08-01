@@ -22,7 +22,7 @@ POST /api/v1/command queues the actual import.
 from __future__ import annotations
 
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import requests
@@ -63,9 +63,27 @@ def check_connection(base_url: str, api_key: str) -> str:
     return response.json().get("version", "unknown")
 
 
-def get_manual_import_candidates(base_url: str, api_key: str, folder: Path) -> list[dict[str, Any]]:
+def remap_path_to_lidarr(folder: Path, local_root: str, lidarr_root: str) -> str:
+    """Rewrite `folder` from this machine's view of a shared library to
+    Lidarr's own view, for setups where the two see the same content under
+    different mount points - e.g. a share mounted at /home/user/Music here
+    but /music inside Lidarr's own container. If `folder` isn't under
+    `local_root`, or either root is blank, returns `folder` unchanged (as
+    a string) since there's nothing sensible to remap."""
+    if not local_root or not lidarr_root:
+        return str(folder)
+    try:
+        relative = folder.relative_to(local_root)
+    except ValueError:
+        return str(folder)
+    return str(PurePosixPath(lidarr_root, *relative.parts))
+
+
+def get_manual_import_candidates(base_url: str, api_key: str, folder: Path | str) -> list[dict[str, Any]]:
     """Ask Lidarr to scan `folder` and propose matches for each audio file,
-    the same way its Manual Import screen does."""
+    the same way its Manual Import screen does. `folder` must be a path as
+    Lidarr itself would see it (see remap_path_to_lidarr if this machine
+    mounts the same content under a different path)."""
     try:
         response = requests.get(
             _url(base_url, "/api/v1/manualimport"),
@@ -201,7 +219,14 @@ def wait_for_command(
         time.sleep(COMMAND_POLL_INTERVAL)
 
 
-def import_folder(base_url: str, api_key: str, folder: Path, import_mode: str = "auto") -> tuple[int, int, list[str]]:
+def import_folder(
+    base_url: str,
+    api_key: str,
+    folder: Path,
+    import_mode: str = "auto",
+    local_root: str = "",
+    lidarr_root: str = "",
+) -> tuple[int, int, list[str]]:
     """Scan `folder` via Lidarr's manual-import endpoint and submit the
     candidates Lidarr fully auto-matched. For candidates Lidarr rejected
     specifically because it already has a file for that track (the
@@ -209,17 +234,24 @@ def import_folder(base_url: str, api_key: str, folder: Path, import_mode: str = 
     database doesn't know is gone), the stale TrackFile record is deleted
     and the scan retried once before giving up on those.
 
+    `folder` is this machine's path. If Lidarr sees the same content under
+    a different mount point (e.g. Lidarr runs elsewhere/in a container),
+    pass `local_root`/`lidarr_root` (see remap_path_to_lidarr) so the
+    folder sent to Lidarr's API matches its own filesystem view - otherwise
+    Lidarr will silently find nothing at a path that doesn't exist for it.
+
     Returns (imported_count, skipped_count, skipped_file_descriptions),
     where each skipped description includes Lidarr's own rejection reason.
     Never raises for individual unmatched files - only for connectivity/API
     failures or a Lidarr-reported import failure."""
-    candidates = get_manual_import_candidates(base_url, api_key, folder)
+    lidarr_folder = remap_path_to_lidarr(folder, local_root, lidarr_root)
+    candidates = get_manual_import_candidates(base_url, api_key, lidarr_folder)
 
     stale_album_ids = {c["album"]["id"] for c in candidates if has_existing_file_rejection(c)}
     if stale_album_ids:
         for album_id in stale_album_ids:
             clear_stale_trackfiles(base_url, api_key, album_id)
-        candidates = get_manual_import_candidates(base_url, api_key, folder)
+        candidates = get_manual_import_candidates(base_url, api_key, lidarr_folder)
 
     matched = [c for c in candidates if is_fully_matched(c)]
     skipped = [c for c in candidates if not is_fully_matched(c)]

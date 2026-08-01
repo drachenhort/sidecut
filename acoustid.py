@@ -165,15 +165,21 @@ class LidarrImportWorker(QThread):
     import_finished = Signal(int, int, str)  # imported_count, skipped_count, "; "-joined skipped names
     import_error = Signal(str)
 
-    def __init__(self, base_url: str, api_key: str, folder: Path) -> None:
+    def __init__(
+        self, base_url: str, api_key: str, folder: Path, local_root: str = "", lidarr_root: str = ""
+    ) -> None:
         super().__init__()
         self.base_url = base_url
         self.api_key = api_key
         self.folder = folder
+        self.local_root = local_root
+        self.lidarr_root = lidarr_root
 
     def run(self) -> None:
         try:
-            imported, skipped, skipped_names = lidarr.import_folder(self.base_url, self.api_key, self.folder)
+            imported, skipped, skipped_names = lidarr.import_folder(
+                self.base_url, self.api_key, self.folder, local_root=self.local_root, lidarr_root=self.lidarr_root
+            )
         except lidarr.LidarrError as exc:
             self.import_error.emit(str(exc))
             return
@@ -221,7 +227,21 @@ class LidarrSettingsDialog(QDialog):
         self.key_edit.setPlaceholderText("API key (Lidarr: Settings > General)")
         form.addRow("URL:", self.url_edit)
         form.addRow("API key:", self.key_edit)
+
+        self.local_root_edit = QLineEdit(self.settings.value("lidarr_local_root", ""))
+        self.local_root_edit.setPlaceholderText("e.g. /home/user/Music (leave blank if not needed)")
+        self.lidarr_root_edit = QLineEdit(self.settings.value("lidarr_root", ""))
+        self.lidarr_root_edit.setPlaceholderText("e.g. /music (leave blank if not needed)")
+        form.addRow("Local path to library:", self.local_root_edit)
+        form.addRow("Same path inside Lidarr:", self.lidarr_root_edit)
+        path_hint = QLabel(
+            "Only needed if this machine mounts the library at a different path than Lidarr sees\n"
+            "it (e.g. Lidarr runs in a container/on another host). Leave both blank if this app runs\n"
+            "on the same machine/path as Lidarr - otherwise Import to Lidarr will silently find nothing."
+        )
+        path_hint.setWordWrap(True)
         layout.addLayout(form)
+        layout.addWidget(path_hint)
 
         test_row = QHBoxLayout()
         self.test_button = QPushButton("Test Connection")
@@ -261,6 +281,8 @@ class LidarrSettingsDialog(QDialog):
     def accept(self) -> None:
         self.settings.setValue("lidarr_url", self.url_edit.text().strip())
         self.settings.setValue("lidarr_api_key", self.key_edit.text().strip())
+        self.settings.setValue("lidarr_local_root", self.local_root_edit.text().strip())
+        self.settings.setValue("lidarr_root", self.lidarr_root_edit.text().strip())
         super().accept()
 
 
@@ -518,10 +540,12 @@ class MainWindow(QMainWindow):
             return
 
         folder = Path(self.folder_edit.text())
+        local_root = self.settings.value("lidarr_local_root", "")
+        lidarr_root = self.settings.value("lidarr_root", "")
         self.lidarr_import_button.setEnabled(False)
         self.status_label.setText(f"Handing {folder} to Lidarr's Manual Import API...")
 
-        self.lidarr_worker = LidarrImportWorker(base_url, api_key, folder)
+        self.lidarr_worker = LidarrImportWorker(base_url, api_key, folder, local_root, lidarr_root)
         self.lidarr_worker.import_finished.connect(self._on_lidarr_import_finished)
         self.lidarr_worker.import_error.connect(self._on_lidarr_import_error)
         self.lidarr_worker.start()

@@ -89,7 +89,30 @@ def test_run_from_environment_calls_lidarr_import_when_configured(
         result = lidarr_hook.run_from_environment(settings)
 
     assert result == 0
-    import_folder.assert_called_once_with("http://localhost:8686", "key123", tmp_path)
+    import_folder.assert_called_once_with(
+        "http://localhost:8686", "key123", tmp_path, local_root="", lidarr_root=""
+    )
+
+
+def test_run_from_environment_passes_configured_path_mapping(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    flac = tmp_path / "song.flac"
+    make_flac(flac)
+    monkeypatch.setenv("lidarr_eventtype", "Download")
+    monkeypatch.setenv("lidarr_addedtrackpaths", str(flac))
+    monkeypatch.setenv("lidarr_artist_path", str(tmp_path))
+
+    settings = _settings(tmp_path)
+    settings.setValue("lidarr_url", "http://localhost:8686")
+    settings.setValue("lidarr_api_key", "key123")
+    settings.setValue("lidarr_local_root", str(tmp_path))
+    settings.setValue("lidarr_root", "/music")
+
+    with patch("lidarr.import_folder", return_value=(1, 0, [])) as import_folder:
+        lidarr_hook.run_from_environment(settings)
+
+    import_folder.assert_called_once_with(
+        "http://localhost:8686", "key123", tmp_path, local_root=str(tmp_path), lidarr_root="/music"
+    )
 
 
 def test_run_from_environment_returns_error_on_conversion_failure(

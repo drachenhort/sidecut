@@ -12,6 +12,15 @@ All notable changes to this project are documented in this file.
   prefix changed from `flac2mp3-` to `acoustid-convert-`.
 
 ### Added
+- New **Local path to library**/**Same path inside Lidarr** fields in
+  Lidarr Settings...: when this app sees the library at a different
+  filesystem path than Lidarr does (e.g. Lidarr runs in a container or on
+  another host and the same share is mounted differently here), Import to
+  Lidarr and the Custom Script hook now rewrite the folder path to
+  Lidarr's own view (`lidarr.remap_path_to_lidarr()`) before scanning -
+  previously this silently found nothing, since Lidarr's manual-import
+  API can only look things up under its own filesystem view. Leave both
+  blank if paths already agree.
 - New **Import to Lidarr** button (optional, off by default, entirely
   independent of everything else in the window): hands the current folder
   to Lidarr's own Manual Import API instead of writing to Lidarr's
