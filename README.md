@@ -119,6 +119,15 @@ In the window:
   similarly paced out, rather than one huge command or a burst of
   requests all at once - useful when importing something like a full
   discography rather than a single album.
+- Before scanning, the folder's path is matched against Lidarr's own
+  artist list to resolve an `artistId`, which is then passed along with
+  the scan. This matters most when two artists in your library share the
+  same name (common for band names): without a known `artistId`, Lidarr
+  can't tell which one a folder belongs to and gives up on reading tags
+  for the whole folder entirely rather than guessing - every file in it
+  comes back completely unmatched, even ones that are otherwise perfectly
+  identifiable (e.g. via this tool's own AcoustID check). Passing
+  `artistId` sidesteps that name lookup altogether.
 - Lidarr reads the files' own embedded tags to propose matches. Since
   this tool preserves full MusicBrainz/AcoustID tags through conversion,
   well-tagged files are usually auto-matched with no input needed.

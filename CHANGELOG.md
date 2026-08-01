@@ -20,6 +20,19 @@ All notable changes to this project are documented in this file.
   dialog for a checkbox left on before setup was finished).
 
 ### Fixed
+- Diagnosed against a real Lidarr instance: 184 files were reported as
+  completely unmatched ("no artist match") despite having valid tags
+  (confirmed independently via this tool's own AcoustID check). Lidarr's
+  log showed why: `MultipleArtistsFoundException` - the library had two
+  different artists with the same name, and unable to resolve which one
+  a >100-file folder belonged to by name alone, Lidarr skipped reading
+  tags for the entire folder rather than guessing, so every file came
+  back with empty `audioTags` and no match at all. `import_folder()` now
+  looks up the artist by matching the folder's path against Lidarr's own
+  artist list first (new `get_artist_id_for_path()`) and passes that
+  `artistId` with the scan, so Lidarr never needs to guess from an
+  ambiguous name. Verified against the real instance: the same 184-file
+  scan went from 0 matched/184 unmatched to 184/184 matched.
 - A large import (e.g. importing a ~100-track discography in one go
   after a big conversion batch) submitted every matched file in a single
   ManualImport command and cleared stale TrackFile records with an

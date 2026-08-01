@@ -7,6 +7,15 @@ import requests
 import lidarr
 
 
+def _no_artist_match_response() -> Mock:
+    """Mocks the GET /api/v1/artist call import_folder() makes up front to
+    resolve an artistId by path; an empty list means "no match found",
+    same as today's behavior when that lookup isn't relevant to a test."""
+    response = Mock()
+    response.json.return_value = []
+    return response
+
+
 def _matched_candidate(path: str, artist_id: int = 1, album_id: int = 2, track_id: int = 3) -> dict:
     return {
         "path": path,
@@ -54,6 +63,69 @@ def test_get_manual_import_candidates_passes_folder_and_returns_json() -> None:
     assert candidates == [{"path": "/music/song.mp3"}]
     assert get.call_args.kwargs["params"]["folder"] == "/music"
     assert get.call_args.kwargs["timeout"] == lidarr.MANUAL_IMPORT_SCAN_TIMEOUT
+    assert "artistId" not in get.call_args.kwargs["params"]
+
+
+def test_get_manual_import_candidates_includes_artist_id_when_given() -> None:
+    response = Mock()
+    response.json.return_value = []
+
+    with patch("requests.get", return_value=response) as get:
+        lidarr.get_manual_import_candidates("http://localhost:8686", "key", Path("/music"), artist_id=855)
+
+    assert get.call_args.kwargs["params"]["artistId"] == 855
+
+
+def test_get_artist_id_for_path_matches_exact_path() -> None:
+    response = Mock()
+    response.json.return_value = [
+        {"id": 434, "path": "/music/Jelly Roll"},
+        {"id": 967, "path": "/music/Jelly Roll (Rock band from Georgia)"},
+    ]
+
+    with patch("requests.get", return_value=response):
+        assert lidarr.get_artist_id_for_path("http://localhost:8686", "key", "/music/Jelly Roll") == 434
+
+
+def test_get_artist_id_for_path_matches_subfolder() -> None:
+    response = Mock()
+    response.json.return_value = [{"id": 855, "path": "/music/Alex Anwandter"}]
+
+    with patch("requests.get", return_value=response):
+        result = lidarr.get_artist_id_for_path(
+            "http://localhost:8686", "key", "/music/Alex Anwandter/Amiga (2016)"
+        )
+
+    assert result == 855
+
+
+def test_get_artist_id_for_path_returns_none_without_a_match() -> None:
+    response = Mock()
+    response.json.return_value = [{"id": 1, "path": "/music/Someone Else"}]
+
+    with patch("requests.get", return_value=response):
+        assert lidarr.get_artist_id_for_path("http://localhost:8686", "key", "/music/Jelly Roll") is None
+
+
+def test_get_artist_id_for_path_does_not_false_match_a_similarly_named_prefix() -> None:
+    # "/music/Jelly Roll" must not match an artist at "/music/Jelly Rollers"
+    response = Mock()
+    response.json.return_value = [{"id": 1, "path": "/music/Jelly Rollers"}]
+
+    with patch("requests.get", return_value=response):
+        assert lidarr.get_artist_id_for_path("http://localhost:8686", "key", "/music/Jelly Roll") is None
+
+
+def test_import_folder_resolves_and_passes_artist_id() -> None:
+    artist_response = Mock()
+    artist_response.json.return_value = [{"id": 434, "path": "/music/Jelly Roll"}]
+    candidates_response = Mock()
+    candidates_response.json.return_value = []
+
+    with patch("requests.get", side_effect=[artist_response, candidates_response]) as get:
+        lidarr.import_folder("http://localhost:8686", "key", Path("/music/Jelly Roll"))
+
+    assert get.call_args_list[1].kwargs["params"]["artistId"] == 434
 
 
 def test_get_manual_import_candidates_raises_clear_error_on_timeout() -> None:
@@ -313,7 +385,10 @@ def test_import_folder_submits_large_batches_in_chunks() -> None:
     wait_response.json.return_value = {"status": "completed"}
 
     with (
-        patch("requests.get", side_effect=[candidates_response, wait_response, wait_response, wait_response]),
+        patch(
+            "requests.get",
+            side_effect=[_no_artist_match_response(), candidates_response, wait_response, wait_response, wait_response],
+        ),
         patch("requests.post", return_value=post_response) as post,
         patch("time.sleep") as sleep,
     ):
@@ -344,7 +419,9 @@ def test_import_folder_only_submits_matched_candidates() -> None:
     import_post_response.json.return_value = {"id": 2}
 
     with (
-        patch("requests.get", side_effect=[candidates_response, import_wait_response]),
+        patch(
+            "requests.get", side_effect=[_no_artist_match_response(), candidates_response, import_wait_response]
+        ),
         patch("requests.post", return_value=import_post_response) as post,
     ):
         imported, skipped, skipped_names = lidarr.import_folder("http://localhost:8686", "key", Path("/music"))
@@ -413,7 +490,13 @@ def test_import_folder_clears_stale_trackfile_and_retries(tmp_path: Path) -> Non
     with (
         patch(
             "requests.get",
-            side_effect=[first_scan_response, trackfiles_response, second_scan_response, import_wait_response],
+            side_effect=[
+                _no_artist_match_response(),
+                first_scan_response,
+                trackfiles_response,
+                second_scan_response,
+                import_wait_response,
+            ],
         ),
         patch("requests.delete", return_value=Mock()) as delete,
         patch("requests.post", return_value=import_post_response),
@@ -438,7 +521,9 @@ def test_import_folder_raises_on_lidarr_reported_failure() -> None:
     import_post_response.json.return_value = {"id": 2}
 
     with (
-        patch("requests.get", side_effect=[candidates_response, import_wait_response]),
+        patch(
+            "requests.get", side_effect=[_no_artist_match_response(), candidates_response, import_wait_response]
+        ),
         patch("requests.post", return_value=import_post_response),
     ):
         with pytest.raises(lidarr.LidarrError, match="disk full"):

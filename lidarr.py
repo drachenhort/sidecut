@@ -117,16 +117,45 @@ def lidarr_path_to_local(path: str, local_root: str, lidarr_root: str) -> Path:
     return Path(local_root, *relative.parts)
 
 
-def get_manual_import_candidates(base_url: str, api_key: str, folder: Path | str) -> list[dict[str, Any]]:
+def get_artist_id_for_path(base_url: str, api_key: str, folder: str) -> int | None:
+    """Look up which artist (if any) Lidarr's library has recorded at
+    `folder` or a parent of it. Used to disambiguate a manual-import scan
+    when Lidarr can't infer the artist from the folder name alone - e.g.
+    two different artists sharing the same name cause Lidarr to give up
+    on parsing entirely ("Expected one artist, but found 2") rather than
+    guess, leaving every file unmatched with no tags even read. Returns
+    None (not an error) if no artist's path matches."""
+    try:
+        response = requests.get(_url(base_url, "/api/v1/artist"), headers=_headers(api_key), timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise LidarrError(f"Failed to look up Lidarr's artist list: {exc}") from exc
+    folder = folder.rstrip("/")
+    for artist in response.json():
+        artist_path = (artist.get("path") or "").rstrip("/")
+        if artist_path and (folder == artist_path or folder.startswith(f"{artist_path}/")):
+            return artist["id"]
+    return None
+
+
+def get_manual_import_candidates(
+    base_url: str, api_key: str, folder: Path | str, artist_id: int | None = None
+) -> list[dict[str, Any]]:
     """Ask Lidarr to scan `folder` and propose matches for each audio file,
     the same way its Manual Import screen does. `folder` must be a path as
     Lidarr itself would see it (see remap_path_to_lidarr if this machine
-    mounts the same content under a different path)."""
+    mounts the same content under a different path). Pass `artist_id` (see
+    get_artist_id_for_path) when known, so Lidarr doesn't have to infer the
+    artist from the folder name - needed when that's ambiguous (e.g. two
+    library artists sharing a name)."""
+    params = {"folder": str(folder), "filterExistingFiles": "true", "replaceExistingFiles": "false"}
+    if artist_id is not None:
+        params["artistId"] = artist_id
     try:
         response = requests.get(
             _url(base_url, "/api/v1/manualimport"),
             headers=_headers(api_key),
-            params={"folder": str(folder), "filterExistingFiles": "true", "replaceExistingFiles": "false"},
+            params=params,
             timeout=MANUAL_IMPORT_SCAN_TIMEOUT,
         )
         response.raise_for_status()
@@ -344,7 +373,11 @@ def import_folder(
     failures or a Lidarr-reported import failure (which stops further
     batches - already-imported batches stay imported)."""
     lidarr_folder = remap_path_to_lidarr(folder, local_root, lidarr_root)
-    candidates = get_manual_import_candidates(base_url, api_key, lidarr_folder)
+    # Resolving the artist by path up front means Lidarr never has to guess
+    # it from the folder name - which it can't do at all when two library
+    # artists share a name, and then gives up on parsing the whole folder.
+    artist_id = get_artist_id_for_path(base_url, api_key, lidarr_folder)
+    candidates = get_manual_import_candidates(base_url, api_key, lidarr_folder, artist_id)
 
     stale_album_ids = {c["album"]["id"] for c in candidates if has_existing_file_rejection(c)}
     for i, album_id in enumerate(stale_album_ids):
@@ -352,7 +385,7 @@ def import_folder(
             time.sleep(TRACKFILE_DELETE_PAUSE)
         clear_stale_trackfiles(base_url, api_key, album_id, local_root, lidarr_root)
     if stale_album_ids:
-        candidates = get_manual_import_candidates(base_url, api_key, lidarr_folder)
+        candidates = get_manual_import_candidates(base_url, api_key, lidarr_folder, artist_id)
 
     matched = [c for c in candidates if is_fully_matched(c)]
     skipped = [c for c in candidates if not is_fully_matched(c)]
