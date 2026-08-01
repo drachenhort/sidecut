@@ -120,6 +120,30 @@ def test_convert_one_keeps_source_on_failure(tmp_path: Path) -> None:
     assert not (tmp_path / "broken.mp3").exists()
 
 
+def test_convert_one_preserves_both_date_and_year(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src, date="2019-05-01", year="1999")
+
+    with open("/dev/null", "w") as log:
+        result = core.convert_one(src, core.QUALITY_PRESETS["v0"], log)
+
+    assert result.ok
+    id3 = ID3(tmp_path / "song.mp3")
+    assert str(id3["TDRC"].text[0]) == "2019-05-01"
+    txxx_descs = {frame.desc: frame.text[0] for frame in id3.getall("TXXX")}
+    assert txxx_descs["year"] == "1999"
+
+
+def test_convert_one_reports_failure_instead_of_raising_on_missing_source(tmp_path: Path) -> None:
+    src = tmp_path / "gone.flac"  # never created, e.g. deleted after the scan
+
+    with open("/dev/null", "w") as log:
+        result = core.convert_one(src, core.QUALITY_PRESETS["v0"], log)
+
+    assert not result.ok
+    assert not (tmp_path / "gone.mp3").exists()
+
+
 def test_convert_one_respects_cancellation(tmp_path: Path) -> None:
     src = tmp_path / "song.flac"
     make_flac(src)
