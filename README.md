@@ -72,6 +72,16 @@ In the window:
 
 ## Lidarr import (optional)
 
+- Every request to Lidarr automatically retries a few times, with
+  backoff, on connection errors, timeouts, and 5xx server errors - real
+  but occasional occurrences against a live instance (a network blip, a
+  moment of overload) shouldn't fail an entire import. A 404 on deleting
+  a stale TrackFile record is treated as success rather than an error:
+  it means the record is already gone (most likely Lidarr's own
+  concurrent reconciliation, or another run of this tool, got there
+  first), which is exactly the state we wanted anyway. 4xx responses are
+  otherwise never retried, since they're logical/permanent, not
+  transient - retrying would just get the same answer.
 - Entirely separate feature, off by default. Click **Lidarr Settings...**
   to enter your Lidarr **URL** (e.g. `http://localhost:8686`) and **API
   key** (Lidarr's Settings > General) and use **Test Connection** to

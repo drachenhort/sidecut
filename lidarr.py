@@ -62,6 +62,15 @@ IMPORT_BATCH_PAUSE = 2.0
 # albums/tracks means many individual DELETE calls - pace them out rather
 # than firing them back-to-back.
 TRACKFILE_DELETE_PAUSE = 0.5
+# Transient network hiccups (a dropped connection, a momentary timeout, a
+# 5xx while Lidarr is briefly overloaded) shouldn't fail an entire import -
+# a short retry-with-backoff covers those. 4xx responses are never
+# retried: they're logical/permanent (e.g. a 404 means the resource is
+# genuinely gone), not transient, so retrying would just get the same
+# answer.
+RETRY_ATTEMPTS = 3
+RETRY_BACKOFF = 2.0
+_RETRYABLE_STATUS_CODES = {500, 502, 503, 504}
 
 
 class LidarrError(Exception):
@@ -77,12 +86,34 @@ def _url(base_url: str, path: str) -> str:
     return f"{base_url.rstrip('/')}{path}"
 
 
+def _with_retry(method_func: Any, *args: Any, **kwargs: Any) -> requests.Response:
+    """Call `method_func(*args, **kwargs)` (a requests.get/post/delete),
+    retrying up to RETRY_ATTEMPTS times with backoff on connection errors,
+    timeouts, and 5xx server errors. Raises the last such exception if all
+    attempts fail; any other response (including 4xx) is returned as-is
+    on the first attempt, since those aren't transient."""
+    last_exc: BaseException | None = None
+    for attempt in range(RETRY_ATTEMPTS):
+        try:
+            response = method_func(*args, **kwargs)
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            last_exc = exc
+        else:
+            if response.status_code not in _RETRYABLE_STATUS_CODES:
+                return response
+            last_exc = requests.HTTPError(f"{response.status_code} server error", response=response)
+        if attempt < RETRY_ATTEMPTS - 1:
+            time.sleep(RETRY_BACKOFF * (2**attempt))
+    assert last_exc is not None
+    raise last_exc
+
+
 def check_connection(base_url: str, api_key: str) -> str:
     """Return Lidarr's version string. Raises LidarrError if unreachable or
     the API key is rejected."""
     try:
-        response = requests.get(
-            _url(base_url, "/api/v1/system/status"), headers=_headers(api_key), timeout=REQUEST_TIMEOUT
+        response = _with_retry(
+            requests.get, _url(base_url, "/api/v1/system/status"), headers=_headers(api_key), timeout=REQUEST_TIMEOUT
         )
     except requests.RequestException as exc:
         raise LidarrError(f"Could not reach Lidarr at {base_url}: {exc}") from exc
@@ -134,7 +165,9 @@ def get_artist_id_for_path(base_url: str, api_key: str, folder: str) -> int | No
     guess, leaving every file unmatched with no tags even read. Returns
     None (not an error) if no artist's path matches."""
     try:
-        response = requests.get(_url(base_url, "/api/v1/artist"), headers=_headers(api_key), timeout=REQUEST_TIMEOUT)
+        response = _with_retry(
+            requests.get, _url(base_url, "/api/v1/artist"), headers=_headers(api_key), timeout=REQUEST_TIMEOUT
+        )
         response.raise_for_status()
     except requests.RequestException as exc:
         raise LidarrError(f"Failed to look up Lidarr's artist list: {exc}") from exc
@@ -160,7 +193,8 @@ def get_manual_import_candidates(
     if artist_id is not None:
         params["artistId"] = artist_id
     try:
-        response = requests.get(
+        response = _with_retry(
+            requests.get,
             _url(base_url, "/api/v1/manualimport"),
             headers=_headers(api_key),
             params=params,
@@ -240,8 +274,8 @@ def get_metadata_profile_disallowed_types(base_url: str, api_key: str, metadata_
     excluded by either - candidates for why a real MusicBrainz release
     never got synced into an artist's known albums in the first place."""
     try:
-        response = requests.get(
-            _url(base_url, "/api/v1/metadataprofile"), headers=_headers(api_key), timeout=REQUEST_TIMEOUT
+        response = _with_retry(
+            requests.get, _url(base_url, "/api/v1/metadataprofile"), headers=_headers(api_key), timeout=REQUEST_TIMEOUT
         )
         response.raise_for_status()
     except requests.RequestException as exc:
@@ -267,8 +301,9 @@ def explain_missing_album(base_url: str, api_key: str, artist_id: int, folder_na
     determined, in which case the plain Lidarr rejection text still
     applies."""
     try:
-        artist_response = requests.get(
-            _url(base_url, f"/api/v1/artist/{artist_id}"), headers=_headers(api_key), timeout=REQUEST_TIMEOUT
+        artist_response = _with_retry(
+            requests.get, _url(base_url, f"/api/v1/artist/{artist_id}"), headers=_headers(api_key),
+            timeout=REQUEST_TIMEOUT,
         )
         artist_response.raise_for_status()
         artist = artist_response.json()
@@ -280,7 +315,8 @@ def explain_missing_album(base_url: str, api_key: str, artist_id: int, folder_na
         return None
 
     try:
-        lookup_response = requests.get(
+        lookup_response = _with_retry(
+            requests.get,
             _url(base_url, "/api/v1/album/lookup"),
             headers=_headers(api_key),
             params={"term": f"{artist.get('artistName', '')} {guessed_title}"},
@@ -322,8 +358,12 @@ def explain_missing_album(base_url: str, api_key: str, artist_id: int, folder_na
 
 def _queue_command(base_url: str, api_key: str, payload: dict[str, Any]) -> int:
     try:
-        response = requests.post(
-            _url(base_url, "/api/v1/command"), headers=_headers(api_key), json=payload, timeout=REQUEST_TIMEOUT
+        response = _with_retry(
+            requests.post,
+            _url(base_url, "/api/v1/command"),
+            headers=_headers(api_key),
+            json=payload,
+            timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()
     except requests.RequestException as exc:
@@ -366,7 +406,8 @@ def submit_manual_import(
 def get_album_trackfiles(base_url: str, api_key: str, album_id: int) -> list[dict[str, Any]]:
     """List Lidarr's existing TrackFile records for an album."""
     try:
-        response = requests.get(
+        response = _with_retry(
+            requests.get,
             _url(base_url, "/api/v1/trackfile"),
             headers=_headers(api_key),
             params={"albumId": album_id},
@@ -382,7 +423,8 @@ def get_artist_trackfiles(base_url: str, api_key: str, artist_id: int) -> list[d
     """List Lidarr's existing TrackFile records for an artist, across all
     of their albums."""
     try:
-        response = requests.get(
+        response = _with_retry(
+            requests.get,
             _url(base_url, "/api/v1/trackfile"),
             headers=_headers(api_key),
             params={"artistId": artist_id},
@@ -401,11 +443,23 @@ def delete_trackfile(base_url: str, api_key: str, trackfile_id: int) -> None:
     clear_stale_trackfiles for the safe, existence-checked way to remove
     only genuinely orphaned records."""
     try:
-        response = requests.delete(
-            _url(base_url, f"/api/v1/trackfile/{trackfile_id}"), headers=_headers(api_key), timeout=REQUEST_TIMEOUT
+        response = _with_retry(
+            requests.delete,
+            _url(base_url, f"/api/v1/trackfile/{trackfile_id}"),
+            headers=_headers(api_key),
+            timeout=REQUEST_TIMEOUT,
         )
-        response.raise_for_status()
     except requests.RequestException as exc:
+        raise LidarrError(f"Failed to delete stale track file {trackfile_id}: {exc}") from exc
+    if response.status_code == 404:
+        # Already gone by the time we got here - most likely Lidarr's own
+        # concurrent reconciliation (or another run of this tool) removed
+        # it first. The goal state, "this record no longer exists", is
+        # already true, so this isn't a failure worth raising over.
+        return
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
         raise LidarrError(f"Failed to delete stale track file {trackfile_id}: {exc}") from exc
 
 
@@ -490,7 +544,7 @@ def wait_for_command(
     url = _url(base_url, f"/api/v1/command/{command_id}")
     while True:
         try:
-            response = requests.get(url, headers=_headers(api_key), timeout=REQUEST_TIMEOUT)
+            response = _with_retry(requests.get, url, headers=_headers(api_key), timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
         except requests.RequestException as exc:
             raise LidarrError(f"Failed to poll the Lidarr import's status: {exc}") from exc

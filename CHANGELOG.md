@@ -12,6 +12,15 @@ All notable changes to this project are documented in this file.
   prefix changed from `flac2mp3-` to `acoustid-convert-`.
 
 ### Added
+- All Lidarr API calls now retry automatically (`RETRY_ATTEMPTS`, with
+  backoff) on connection errors, timeouts, and 5xx server errors, via a
+  new `_with_retry()` wrapper - prompted by a real `Failed to delete
+  stale track file: 404 Client Error` during a network hiccup. 4xx
+  responses are never retried (logical/permanent, not transient), with
+  one exception: deleting a stale TrackFile now treats a 404 as success
+  rather than an error, since it means the record is already gone (most
+  likely Lidarr's own concurrent reconciliation, or another run of this
+  tool, got there first) - exactly the state that deletion wanted anyway.
 - Diagnosed live (an Eisbrecher compilation, "Eiskalt", showed up as 16
   unmatched files with a "Couldn't find similar album" rejection): the
   album was a real MusicBrainz release, but the artist's Lidarr metadata

@@ -28,6 +28,66 @@ def _matched_candidate(path: str, artist_id: int = 1, album_id: int = 2, track_i
     }
 
 
+def test_with_retry_returns_first_success() -> None:
+    func = Mock(return_value=Mock(status_code=200))
+    result = lidarr._with_retry(func, "http://x", timeout=1)
+    assert result is func.return_value
+    assert func.call_count == 1
+
+
+def test_with_retry_retries_connection_errors_then_succeeds() -> None:
+    ok = Mock(status_code=200)
+    func = Mock(side_effect=[requests.ConnectionError("blip"), requests.Timeout("blip"), ok])
+    with patch("time.sleep") as sleep:
+        result = lidarr._with_retry(func, "http://x")
+    assert result is ok
+    assert func.call_count == 3
+    assert sleep.call_count == 2
+
+
+def test_with_retry_retries_5xx_then_succeeds() -> None:
+    server_error = Mock(status_code=503)
+    ok = Mock(status_code=200)
+    func = Mock(side_effect=[server_error, ok])
+    with patch("time.sleep"):
+        result = lidarr._with_retry(func, "http://x")
+    assert result is ok
+    assert func.call_count == 2
+
+
+def test_with_retry_does_not_retry_4xx() -> None:
+    not_found = Mock(status_code=404)
+    func = Mock(return_value=not_found)
+    result = lidarr._with_retry(func, "http://x")
+    assert result is not_found
+    assert func.call_count == 1
+
+
+def test_with_retry_raises_after_exhausting_attempts() -> None:
+    func = Mock(side_effect=requests.ConnectionError("still down"))
+    with patch("time.sleep"):
+        with pytest.raises(requests.ConnectionError, match="still down"):
+            lidarr._with_retry(func, "http://x")
+    assert func.call_count == lidarr.RETRY_ATTEMPTS
+
+
+def test_delete_trackfile_treats_404_as_already_gone() -> None:
+    # Most likely cause in practice: Lidarr's own concurrent reconciliation
+    # (or another run of this tool) already removed the record - the goal
+    # state is already achieved, so this must not raise.
+    response = Mock(status_code=404)
+    with patch("requests.delete", return_value=response):
+        lidarr.delete_trackfile("http://localhost:8686", "key", 20050)  # does not raise
+
+
+def test_delete_trackfile_raises_on_other_http_errors() -> None:
+    response = Mock(status_code=403)
+    response.raise_for_status.side_effect = requests.HTTPError("403 forbidden", response=response)
+    with patch("requests.delete", return_value=response):
+        with pytest.raises(lidarr.LidarrError, match="Failed to delete"):
+            lidarr.delete_trackfile("http://localhost:8686", "key", 20050)
+
+
 def test_check_connection_returns_version() -> None:
     response = Mock(status_code=200)
     response.json.return_value = {"version": "1.2.3"}
@@ -48,7 +108,7 @@ def test_check_connection_raises_on_bad_api_key() -> None:
 
 
 def test_check_connection_raises_when_unreachable() -> None:
-    with patch("requests.get", side_effect=requests.ConnectionError("no route")):
+    with patch("requests.get", side_effect=requests.ConnectionError("no route")), patch("time.sleep"):
         with pytest.raises(lidarr.LidarrError, match="Could not reach Lidarr"):
             lidarr.check_connection("http://localhost:8686", "key")
 
@@ -171,7 +231,7 @@ def test_import_folder_clears_artist_stale_trackfiles_before_scanning_to_avoid_s
 
 
 def test_get_manual_import_candidates_raises_clear_error_on_timeout() -> None:
-    with patch("requests.get", side_effect=requests.Timeout("timed out")):
+    with patch("requests.get", side_effect=requests.Timeout("timed out")), patch("time.sleep"):
         with pytest.raises(lidarr.LidarrError, match="timed out"):
             lidarr.get_manual_import_candidates("http://localhost:8686", "key", Path("/music"))
 
@@ -454,7 +514,7 @@ def test_explain_missing_album_returns_none_when_no_title_match() -> None:
 
 
 def test_explain_missing_album_returns_none_on_request_failure() -> None:
-    with patch("requests.get", side_effect=requests.ConnectionError("no route")):
+    with patch("requests.get", side_effect=requests.ConnectionError("no route")), patch("time.sleep"):
         result = lidarr.explain_missing_album("http://localhost:8686", "key", 333, "Eiskalt (2011)")
 
     assert result is None
