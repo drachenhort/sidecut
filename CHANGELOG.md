@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- If the log file can't be written to the scanned folder (e.g. a
+  read-only NFS share), the conversion thread crashed silently and the
+  UI got stuck with Start/Cancel both disabled. It now falls back to
+  `~/.local/share/flac2mp3/logs/`, and if that also fails, shows a
+  "Conversion failed" dialog and re-enables Start.
+
 ## [0.1]
 
 ### Fixed

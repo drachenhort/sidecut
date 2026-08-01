@@ -9,6 +9,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+from typing import TextIO
 
 from PySide6.QtCore import QSettings, Qt, QThread, Signal
 from PySide6.QtWidgets import (
@@ -52,6 +53,7 @@ class BatchConverter(QThread):
     file_progress = Signal(int, float, str)
     file_finished = Signal(int, bool)
     batch_finished = Signal(int, int, str, "qint64", "qint64")
+    batch_error = Signal(str)
 
     def __init__(self, files: list[Path], quality: str, log_path: Path, workers: int) -> None:
         super().__init__()
@@ -73,8 +75,23 @@ class BatchConverter(QThread):
         self.file_finished.emit(index, result.ok)
         return result
 
+    def _open_log(self) -> TextIO:
+        try:
+            return self.log_path.open("a", encoding="utf-8")
+        except OSError:
+            fallback_dir = Path.home() / ".local" / "share" / "flac2mp3" / "logs"
+            fallback_dir.mkdir(parents=True, exist_ok=True)
+            self.log_path = fallback_dir / self.log_path.name
+            return self.log_path.open("a", encoding="utf-8")
+
     def run(self) -> None:
-        with self.log_path.open("a", encoding="utf-8") as log, ThreadPoolExecutor(self.workers) as pool:
+        try:
+            log = self._open_log()
+        except OSError as e:
+            self.batch_error.emit(f"Could not write log file: {e}")
+            return
+
+        with log, ThreadPoolExecutor(self.workers) as pool:
             futures = [pool.submit(self._convert, i, f, log) for i, f in enumerate(self.files)]
             results = [f.result() for f in futures]
 
@@ -209,6 +226,7 @@ class MainWindow(QMainWindow):
         self.converter.file_progress.connect(self._on_file_progress)
         self.converter.file_finished.connect(self._on_file_finished)
         self.converter.batch_finished.connect(self._on_batch_finished)
+        self.converter.batch_error.connect(self._on_batch_error)
         self.converter.start()
 
     def _cancel_conversion(self) -> None:
@@ -253,6 +271,12 @@ class MainWindow(QMainWindow):
                 f"After:  {_format_bytes(dst_bytes)}\n"
                 f"Saved:  {_format_bytes(saved)} ({percent:.0f}%)",
             )
+
+    def _on_batch_error(self, message: str) -> None:
+        self.start_button.setEnabled(True)
+        self.cancel_button.setEnabled(False)
+        self.status_label.setText(message)
+        QMessageBox.critical(self, "Conversion failed", message)
 
 
 def main() -> None:
