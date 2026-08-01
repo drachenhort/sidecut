@@ -86,7 +86,6 @@ _STANDARD_FRAME_BUILDERS: dict[str, Callable[[str], object]] = {
     "composer": lambda v: TCOM(encoding=3, text=v),
     "encodedby": lambda v: TENC(encoding=3, text=v),
     "date": lambda v: TDRC(encoding=3, text=v),
-    "year": lambda v: TDRC(encoding=3, text=v),
     "originaldate": lambda v: TDOR(encoding=3, text=v),
     "releasedate": lambda v: TDRL(encoding=3, text=v),
     "genre": lambda v: TCON(encoding=3, text=v),
@@ -275,23 +274,32 @@ def convert_one(
     on_progress: Callable[[Progress], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> ConversionResult:
+    """Convert one file. Never raises: any unexpected failure (missing/unreadable
+    source, disk errors, etc.) is reported as a failed ConversionResult instead of
+    propagating out, since this runs inside a worker thread whose caller must be
+    able to account for every file in the batch."""
     dst = src.with_suffix(".mp3")
-    src_bytes = src.stat().st_size
-    duration = track_duration(src)
-    ok = run_ffmpeg(src, dst, quality_args, log, duration, on_progress, should_cancel)
-    ok = ok and dst.is_file() and dst.stat().st_size > 0
+    try:
+        src_bytes = src.stat().st_size
+        duration = track_duration(src)
+        ok = run_ffmpeg(src, dst, quality_args, log, duration, on_progress, should_cancel)
+        ok = ok and dst.is_file() and dst.stat().st_size > 0
 
-    if ok:
-        try:
-            copy_tags(src, dst)
-        except Exception as exc:  # noqa: BLE001 - any tag failure means "not done"
-            ok = False
-            log.write(f"tag copy failed for {src}: {exc}\n")
+        if ok:
+            try:
+                copy_tags(src, dst)
+            except Exception as exc:  # noqa: BLE001 - any tag failure means "not done"
+                ok = False
+                log.write(f"tag copy failed for {src}: {exc}\n")
 
-    if ok:
-        dst_bytes = dst.stat().st_size
-        src.unlink()
-        return ConversionResult(src, True, src_bytes=src_bytes, dst_bytes=dst_bytes)
+        if ok:
+            dst_bytes = dst.stat().st_size
+            src.unlink()
+            return ConversionResult(src, True, src_bytes=src_bytes, dst_bytes=dst_bytes)
+    except Exception as exc:  # noqa: BLE001 - keep the batch going, report and move on
+        dst.unlink(missing_ok=True)
+        log.write(f"FAILED: {src}: {exc}\n")
+        return ConversionResult(src, False, "conversion failed, see log")
 
     dst.unlink(missing_ok=True)
     if should_cancel is not None and should_cancel():
