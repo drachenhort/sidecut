@@ -14,6 +14,11 @@ All notable changes to this project are documented in this file.
 ### Added
 - The last folder opened (via **Browse...** or on the command line) is
   now remembered between runs and reopened automatically on launch.
+- Optional **Auto-correct mismatched MBID** checkbox: when a Mismatch is
+  found with a confident enough AcoustID score (>= 0.5), the FLAC's
+  `musicbrainz_trackid` tag is rewritten to the correct recording before
+  conversion. Off by default; never applies during a Check AcoustID Only
+  run, which stays fully report-only.
 - A **Mismatch** AcoustID result now spells out what the correct tag
   would be: both the currently tagged artist/title/MBID and AcoustID's
   suggested artist/title/MBID are included in the detail tooltip, instead

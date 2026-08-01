@@ -257,6 +257,49 @@ def test_check_acoustid_reports_mismatch_with_no_linked_recording(tmp_path: Path
     assert "Wrong Artist - Wrong Title" in result.detail
 
 
+def test_correct_acoustid_mismatch_rewrites_recording_id(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src, artist="Wrong Artist", title="Wrong Title", MUSICBRAINZ_TRACKID="mb-track-wrong")
+    result = core.AcoustIDCheck("mismatch", "detail", recording_id="mb-track-correct", score=0.9)
+
+    corrected = core.correct_acoustid_mismatch(src, result)
+
+    assert corrected is True
+    assert result.corrected is True
+    assert "corrected" in result.detail
+    assert FLAC(src)[core._RECORDING_ID_KEY] == ["mb-track-correct"]
+
+
+def test_correct_acoustid_mismatch_skips_low_confidence_score(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src, MUSICBRAINZ_TRACKID="mb-track-wrong")
+    result = core.AcoustIDCheck("mismatch", "detail", recording_id="mb-track-correct", score=0.2)
+
+    corrected = core.correct_acoustid_mismatch(src, result)
+
+    assert corrected is False
+    assert result.corrected is False
+    assert FLAC(src)[core._RECORDING_ID_KEY] == ["mb-track-wrong"]
+
+
+def test_correct_acoustid_mismatch_skips_non_mismatch_status(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src, MUSICBRAINZ_TRACKID="mb-track-1")
+    result = core.AcoustIDCheck("identified", "detail", recording_id="mb-track-2", score=0.9)
+
+    assert core.correct_acoustid_mismatch(src, result) is False
+    assert FLAC(src)[core._RECORDING_ID_KEY] == ["mb-track-1"]
+
+
+def test_correct_acoustid_mismatch_skips_when_no_recording_id(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src, MUSICBRAINZ_TRACKID="mb-track-1")
+    result = core.AcoustIDCheck("mismatch", "detail", recording_id=None, score=0.9)
+
+    assert core.correct_acoustid_mismatch(src, result) is False
+    assert FLAC(src)[core._RECORDING_ID_KEY] == ["mb-track-1"]
+
+
 def test_check_acoustid_reports_identified_when_untagged(tmp_path: Path) -> None:
     src = tmp_path / "song.flac"
     make_flac(src)

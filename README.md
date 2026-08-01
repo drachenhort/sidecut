@@ -48,8 +48,16 @@ In the window:
   found a candidate), **No match**, or **Error**. Hover a cell for details —
   on a **Mismatch**, the tooltip spells out both the currently tagged
   artist/title/MBID and what AcoustID says the correct one is.
-- This is report-only: it never blocks, retags, or otherwise changes the
-  conversion — it's purely informational, also written to the log file.
+- By itself this is report-only: it never blocks, retags, or otherwise
+  changes the file — it's purely informational, also written to the log
+  file.
+- Optionally tick **Auto-correct mismatched MBID** to have a **Mismatch**
+  fix itself: the FLAC's `musicbrainz_trackid` tag is rewritten to
+  AcoustID's suggested recording (only the ID — artist/title/etc. are left
+  alone) before the file converts, but only when AcoustID's score is
+  >= 0.5. Corrected rows show "Mismatch (fixed)". This never applies
+  during a **Check AcoustID Only** run, which always leaves files
+  untouched regardless of this checkbox.
 - Lookups are capped at 4 requests/second total, no matter how many
   parallel jobs are configured — workers block on a shared limiter rather
   than each hammering the API independently.

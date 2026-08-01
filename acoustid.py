@@ -69,7 +69,7 @@ class BatchConverter(QThread):
     file_started = Signal(int)
     file_progress = Signal(int, float, str)
     file_finished = Signal(int, bool)
-    acoustid_checked = Signal(int, str, str)
+    acoustid_checked = Signal(int, str, str, bool)
     batch_finished = Signal(int, int, str, "qint64", "qint64")
     batch_error = Signal(str)
 
@@ -81,6 +81,7 @@ class BatchConverter(QThread):
         workers: int,
         acoustid_apikey: str | None = None,
         acoustid_only: bool = False,
+        acoustid_autocorrect: bool = False,
     ) -> None:
         super().__init__()
         self.files = files
@@ -89,6 +90,9 @@ class BatchConverter(QThread):
         self.workers = workers
         self.acoustid_apikey = acoustid_apikey
         self.acoustid_only = acoustid_only
+        # Never auto-correct on a check-only run: "Check AcoustID Only"
+        # promises files stay untouched, so this flag is ignored there.
+        self.acoustid_autocorrect = acoustid_autocorrect and not acoustid_only
         self._cancel_event = threading.Event()
 
     def cancel(self) -> None:
@@ -96,8 +100,10 @@ class BatchConverter(QThread):
 
     def _check_acoustid(self, index: int, path: Path, log) -> core.AcoustIDCheck:
         result = core.check_acoustid(path, self.acoustid_apikey)
+        if self.acoustid_autocorrect:
+            core.correct_acoustid_mismatch(path, result)
         log.write(f"AcoustID [{result.status}]: {path}: {result.detail}\n")
-        self.acoustid_checked.emit(index, result.status, result.detail)
+        self.acoustid_checked.emit(index, result.status, result.detail, result.corrected)
         return result
 
     def _convert(self, index: int, path: Path, log) -> core.ConversionResult:
@@ -240,18 +246,30 @@ class MainWindow(QMainWindow):
         self.acoustid_key_edit.setText(self.settings.value("acoustid_api_key", ""))
         self.acoustid_key_edit.editingFinished.connect(self._save_acoustid_settings)
 
+        self.acoustid_autocorrect_checkbox = QCheckBox("Auto-correct mismatched MBID")
+        self.acoustid_autocorrect_checkbox.setToolTip(
+            "When Check AcoustID finds a mismatch with a confident enough score "
+            f"(>= {core.ACOUSTID_AUTOCORRECT_MIN_SCORE:.1f}), rewrite the FLAC's "
+            "musicbrainz_trackid tag to AcoustID's suggested recording before converting.\n"
+            "Never applies during a Check AcoustID Only run - that always leaves files untouched."
+        )
+        self.acoustid_autocorrect_checkbox.setChecked(self.settings.value("acoustid_autocorrect", False, type=bool))
+        self.acoustid_autocorrect_checkbox.toggled.connect(self._save_acoustid_settings)
+
         self.checkonly_button = QPushButton("Check AcoustID Only")
         self.checkonly_button.setEnabled(False)
         self.checkonly_button.clicked.connect(self._start_acoustid_check_only)
 
         row.addWidget(self.acoustid_checkbox)
         row.addWidget(self.acoustid_key_edit, stretch=1)
+        row.addWidget(self.acoustid_autocorrect_checkbox)
         row.addWidget(self.checkonly_button)
         return row
 
     def _save_acoustid_settings(self) -> None:
         self.settings.setValue("acoustid_enabled", self.acoustid_checkbox.isChecked())
         self.settings.setValue("acoustid_api_key", self.acoustid_key_edit.text().strip())
+        self.settings.setValue("acoustid_autocorrect", self.acoustid_autocorrect_checkbox.isChecked())
 
     def _save_quality_setting(self) -> None:
         self.settings.setValue("quality", self.quality_combo.currentData())
@@ -321,6 +339,7 @@ class MainWindow(QMainWindow):
         quality = self.quality_combo.currentData()
         prefix = "acoustid-check" if acoustid_only else "acoustid-convert"
         log_path = folder / f"{prefix}-{datetime.now():%Y%m%d-%H%M%S}.log"
+        acoustid_autocorrect = self.acoustid_autocorrect_checkbox.isChecked()
 
         self._acoustid_only_run = acoustid_only
         self.start_button.setEnabled(False)
@@ -329,7 +348,13 @@ class MainWindow(QMainWindow):
         self._completed = 0
 
         self.converter = BatchConverter(
-            self.files, quality, log_path, self.workers_spin.value(), acoustid_apikey, acoustid_only
+            self.files,
+            quality,
+            log_path,
+            self.workers_spin.value(),
+            acoustid_apikey,
+            acoustid_only,
+            acoustid_autocorrect,
         )
         self.converter.file_started.connect(self._on_file_started)
         self.converter.file_progress.connect(self._on_file_progress)
@@ -355,9 +380,10 @@ class MainWindow(QMainWindow):
             bar.setValue(int(percent))
             bar.setFormat(f"{percent:.0f}%  {speed}")
 
-    def _on_acoustid_checked(self, row: int, status: str, detail: str) -> None:
+    def _on_acoustid_checked(self, row: int, status: str, detail: str, corrected: bool) -> None:
         item = self.table.item(row, 3)
-        item.setText(ACOUSTID_STATUS_LABELS.get(status, status))
+        label = ACOUSTID_STATUS_LABELS.get(status, status)
+        item.setText(f"{label} (fixed)" if corrected else label)
         item.setToolTip(detail)
 
     def _on_file_finished(self, row: int, ok: bool) -> None:

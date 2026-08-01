@@ -153,6 +153,7 @@ _FREETEXT_DESCRIPTIONS: dict[str, str] = {
 
 ACOUSTID_LOOKUP_URL = "https://api.acoustid.org/v2/lookup"
 ACOUSTID_RATE_LIMIT_PER_SECOND = 4.0
+ACOUSTID_AUTOCORRECT_MIN_SCORE = 0.5
 
 
 class _RateLimiter:
@@ -179,11 +180,14 @@ _acoustid_rate_limiter = _RateLimiter(ACOUSTID_RATE_LIMIT_PER_SECOND)
 @dataclass
 class AcoustIDCheck:
     """Result of comparing a FLAC's fingerprint against the AcoustID/MusicBrainz
-    database. Purely informational: never blocks or modifies conversion."""
+    database. By itself, purely informational - never blocks or modifies the
+    file; see `correct_acoustid_mismatch` for the opt-in auto-correct step."""
 
     status: str  # "match" | "mismatch" | "identified" | "no_match" | "error"
     detail: str
     recording_id: str | None = None
+    score: float | None = None
+    corrected: bool = False
 
 
 @dataclass
@@ -296,7 +300,7 @@ def check_acoustid(path: Path, api_key: str) -> AcoustIDCheck:
     best_id = recording_ids[0] if recording_ids else None
     if existing_id:
         if existing_id in recording_ids:
-            return AcoustIDCheck("match", f"Matches tagged recording (score {score:.2f})", existing_id)
+            return AcoustIDCheck("match", f"Matches tagged recording (score {score:.2f})", existing_id, score)
         tagged = f"{tagged_artist} - {tagged_title}".strip(" -") or existing_id
         if summary:
             detail = (
@@ -308,12 +312,31 @@ def check_acoustid(path: Path, api_key: str) -> AcoustIDCheck:
                 f"Tagged as '{tagged}' (MBID {existing_id}), but AcoustID's match "
                 f"(score {score:.2f}) has no linked MusicBrainz recording to compare against"
             )
-        return AcoustIDCheck("mismatch", detail, best_id)
+        return AcoustIDCheck("mismatch", detail, best_id, score)
     if summary:
         detail = f"AcoustID suggests '{summary}' (MBID {best_id}, score {score:.2f})"
-        return AcoustIDCheck("identified", detail, best_id)
+        return AcoustIDCheck("identified", detail, best_id, score)
     detail = f"AcoustID match found but has no linked MusicBrainz recording (score {score:.2f})"
-    return AcoustIDCheck("identified", detail, None)
+    return AcoustIDCheck("identified", detail, None, score)
+
+
+def correct_acoustid_mismatch(path: Path, result: AcoustIDCheck, min_score: float = ACOUSTID_AUTOCORRECT_MIN_SCORE) -> bool:
+    """If `result` is a confident enough mismatch, rewrite the FLAC's
+    musicbrainz_trackid tag to AcoustID's suggested recording and mark
+    `result` as corrected (mutating it in place so callers logging/emitting
+    `result` afterwards see the update). Returns whether it corrected
+    anything. Only touches musicbrainz_trackid - artist/title/etc. are left
+    alone since AcoustID's formatting may not match the file's convention."""
+    if result.status != "mismatch" or not result.recording_id:
+        return False
+    if result.score is not None and result.score < min_score:
+        return False
+    tags = FLAC(path)
+    tags[_RECORDING_ID_KEY] = [result.recording_id]
+    tags.save()
+    result.corrected = True
+    result.detail += " — corrected musicbrainz_trackid tag"
+    return True
 
 
 def track_duration(path: Path) -> float | None:
