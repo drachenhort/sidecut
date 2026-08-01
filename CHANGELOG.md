@@ -20,6 +20,23 @@ All notable changes to this project are documented in this file.
   dialog for a checkbox left on before setup was finished).
 
 ### Fixed
+- The 500 error from a stale TrackFile record (see the entry below) could
+  still happen even with `artistId` resolved, because clearing was only
+  reactive - it ran after seeing a rejection, but Lidarr's scan can crash
+  outright (a 500, its `AugmentingService` throwing trying to read a
+  missing file) *before* returning any rejection data to react to.
+  `import_folder()` now clears the resolved artist's stale TrackFile
+  records proactively, before scanning at all
+  (`clear_stale_trackfiles_for_artist()`), so the crash is avoided rather
+  than reacted to. Verified against the real instance: a folder that
+  previously 500'd now scans cleanly.
+- `wait_for_command()` used one timeout for the whole wait, so a
+  submission that was still validly *queued* behind other, unrelated
+  Lidarr work (e.g. a large library rescan working through thousands of
+  tracks) could time out with a misleading error even though nothing was
+  actually stuck. It now has two separate budgets: a generous one
+  (`COMMAND_QUEUE_TIMEOUT`, 30 min) for merely being queued, and the
+  original tighter one for once Lidarr actually starts running it.
 - Diagnosed against a real Lidarr instance: 184 files were reported as
   completely unmatched ("no artist match") despite having valid tags
   (confirmed independently via this tool's own AcoustID check). Lidarr's

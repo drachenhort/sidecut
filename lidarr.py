@@ -42,6 +42,13 @@ REQUEST_TIMEOUT = 30.0
 MANUAL_IMPORT_SCAN_TIMEOUT = 180.0
 COMMAND_POLL_INTERVAL = 1.0
 COMMAND_POLL_TIMEOUT = 300.0
+# A busy Lidarr instance can easily have other large, unrelated jobs
+# ahead of ours in the queue (e.g. a library rescan working through
+# hundreds of albums) - that's normal scheduling, not our command being
+# stuck, so it gets its own much more generous allowance. Once Lidarr
+# actually starts running our command, COMMAND_POLL_TIMEOUT applies as
+# normal from that point.
+COMMAND_QUEUE_TIMEOUT = 1800.0
 # A single ManualImport command covering a huge batch (e.g. importing a
 # ~100-track discography in one go) makes Lidarr do a lot of matching/
 # moving work synchronously in one request, which can time out or bog
@@ -270,6 +277,22 @@ def get_album_trackfiles(base_url: str, api_key: str, album_id: int) -> list[dic
     return response.json()
 
 
+def get_artist_trackfiles(base_url: str, api_key: str, artist_id: int) -> list[dict[str, Any]]:
+    """List Lidarr's existing TrackFile records for an artist, across all
+    of their albums."""
+    try:
+        response = requests.get(
+            _url(base_url, "/api/v1/trackfile"),
+            headers=_headers(api_key),
+            params={"artistId": artist_id},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise LidarrError(f"Failed to look up existing track files for artist {artist_id}: {exc}") from exc
+    return response.json()
+
+
 def delete_trackfile(base_url: str, api_key: str, trackfile_id: int) -> None:
     """DELETEs the file on disk, not just the database record - Lidarr
     treats removing a TrackFile as "delete this file". Never call this for
@@ -285,27 +308,19 @@ def delete_trackfile(base_url: str, api_key: str, trackfile_id: int) -> None:
         raise LidarrError(f"Failed to delete stale track file {trackfile_id}: {exc}") from exc
 
 
-def clear_stale_trackfiles(
-    base_url: str, api_key: str, album_id: int, local_root: str = "", lidarr_root: str = ""
+def _delete_genuinely_stale_trackfiles(
+    base_url: str, api_key: str, trackfiles: list[dict[str, Any]], local_root: str, lidarr_root: str
 ) -> int:
-    """Delete only the TrackFile records for `album_id` whose file is
-    genuinely gone from disk - never a blanket "clear the album" sweep.
-
-    DELETE /api/v1/trackfile removes the actual file, not just the
-    database row, so deleting a record for a file that's still there
-    would destroy real data. For each record, this checks (via
-    lidarr_path_to_local) whether the file still exists locally, and
-    additionally requires the file's *parent directory* to exist too -
-    if we can't even see the containing folder, this machine likely isn't
-    looking at the same filesystem Lidarr is (e.g. local_root/lidarr_root
-    aren't configured for a cross-host setup), and guessing "stale" in
+    """Shared safety-checked deletion loop: only ever deletes a record
+    after confirming, via a real filesystem check (honoring
+    local_root/lidarr_root), that its file is genuinely gone - and
+    requires the file's *parent directory* to be visible at all, since if
+    we can't even see the containing folder, this machine likely isn't
+    looking at the same filesystem Lidarr is, and guessing "stale" in
     that case previously deleted files that were still very much in use.
     When in doubt, a record is left alone: a leftover stale record can
     always be cleared on a later, correctly-configured run, but a wrongly
-    deleted file cannot be undone.
-
-    Returns how many genuinely stale records were deleted."""
-    trackfiles = get_album_trackfiles(base_url, api_key, album_id)
+    deleted file cannot be undone. Returns how many were deleted."""
     deleted = 0
     for trackfile in trackfiles:
         local_path = lidarr_path_to_local(trackfile["path"], local_root, lidarr_root)
@@ -320,12 +335,57 @@ def clear_stale_trackfiles(
     return deleted
 
 
+def clear_stale_trackfiles(
+    base_url: str, api_key: str, album_id: int, local_root: str = "", lidarr_root: str = ""
+) -> int:
+    """Delete only the TrackFile records for `album_id` whose file is
+    genuinely gone from disk - never a blanket "clear the album" sweep.
+    DELETE /api/v1/trackfile removes the actual file, not just the
+    database row, so deleting a record for a file that's still there
+    would destroy real data; see _delete_genuinely_stale_trackfiles for
+    the safety check. Returns how many genuinely stale records were
+    deleted."""
+    trackfiles = get_album_trackfiles(base_url, api_key, album_id)
+    return _delete_genuinely_stale_trackfiles(base_url, api_key, trackfiles, local_root, lidarr_root)
+
+
+def clear_stale_trackfiles_for_artist(
+    base_url: str, api_key: str, artist_id: int, local_root: str = "", lidarr_root: str = ""
+) -> int:
+    """Like clear_stale_trackfiles, but across every album of an artist.
+
+    Meant to run proactively before scanning a whole-artist folder: if
+    even one track's file is stale (this tool deleted/replaced it, e.g.
+    converting a FLAC to MP3), Lidarr's manual-import scan doesn't cleanly
+    reject it - it crashes with a 500 (System.IO.FileNotFoundException
+    from its AugmentingService trying to read that missing file), which
+    aborts the *entire* scan, not just that one file. Clearing stale
+    records first avoids that crash happening at all, rather than reacting
+    to it after the fact. Returns how many genuinely stale records were
+    deleted."""
+    trackfiles = get_artist_trackfiles(base_url, api_key, artist_id)
+    return _delete_genuinely_stale_trackfiles(base_url, api_key, trackfiles, local_root, lidarr_root)
+
+
 def wait_for_command(
-    base_url: str, api_key: str, command_id: int, timeout: float = COMMAND_POLL_TIMEOUT
+    base_url: str,
+    api_key: str,
+    command_id: int,
+    timeout: float = COMMAND_POLL_TIMEOUT,
+    queue_timeout: float = COMMAND_QUEUE_TIMEOUT,
 ) -> dict[str, Any]:
-    """Poll a queued command until Lidarr reports it finished (or `timeout`
-    seconds elapse), returning the final command status payload."""
-    deadline = time.monotonic() + timeout
+    """Poll a queued command until Lidarr reports it finished, returning
+    the final command status payload.
+
+    Two separate budgets, since "queued" and "started" mean very
+    different things: `queue_timeout` covers time spent merely queued
+    (Lidarr hasn't picked it up yet - typically because something else,
+    unrelated to us, is ahead of it, like a large library rescan; that's
+    normal scheduling, not a stuck command, so it gets a generous
+    allowance), while `timeout` covers time spent actually running, which
+    starts counting fresh once Lidarr reports "started"."""
+    queue_deadline = time.monotonic() + queue_timeout
+    started_deadline: float | None = None
     url = _url(base_url, f"/api/v1/command/{command_id}")
     while True:
         try:
@@ -334,10 +394,20 @@ def wait_for_command(
         except requests.RequestException as exc:
             raise LidarrError(f"Failed to poll the Lidarr import's status: {exc}") from exc
         data = response.json()
-        if data.get("status") in ("completed", "failed"):
+        status = data.get("status")
+        if status in ("completed", "failed"):
             return data
-        if time.monotonic() > deadline:
-            raise LidarrError("Timed out waiting for Lidarr to finish the import")
+        now = time.monotonic()
+        if status == "started":
+            if started_deadline is None:
+                started_deadline = now + timeout
+            if now > started_deadline:
+                raise LidarrError("Timed out waiting for Lidarr to finish the import")
+        elif now > queue_deadline:
+            raise LidarrError(
+                f"Command is still queued after {queue_timeout:.0f}s - Lidarr appears to be busy with other "
+                "work (e.g. a large library rescan). It will likely still complete on its own; check back later."
+            )
         time.sleep(COMMAND_POLL_INTERVAL)
 
 
@@ -377,6 +447,12 @@ def import_folder(
     # it from the folder name - which it can't do at all when two library
     # artists share a name, and then gives up on parsing the whole folder.
     artist_id = get_artist_id_for_path(base_url, api_key, lidarr_folder)
+    if artist_id is not None:
+        # Proactively clear this artist's stale trackfiles before scanning
+        # at all: even one file's stale record can crash the whole scan
+        # (see clear_stale_trackfiles_for_artist), not just get politely
+        # rejected, so waiting to react to a rejection is too late here.
+        clear_stale_trackfiles_for_artist(base_url, api_key, artist_id, local_root, lidarr_root)
     candidates = get_manual_import_candidates(base_url, api_key, lidarr_folder, artist_id)
 
     stale_album_ids = {c["album"]["id"] for c in candidates if has_existing_file_rejection(c)}

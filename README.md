@@ -101,17 +101,20 @@ In the window:
   in-memory state. Instead it drives Lidarr's **Manual Import API**: the
   same matching logic behind Lidarr's Manual Import screen, just called
   as an HTTP command instead of clicked through by hand.
-- If Lidarr rejects a match because its database still has a TrackFile
-  record for a file this tool already replaced (e.g. converted a FLAC to
-  MP3 and deleted the original), that stale record is deleted via
-  Lidarr's API and the scan is retried once before giving up - the same
-  fix used by the proven
+- Before scanning, any of the resolved artist's TrackFile records whose
+  file is confirmed gone from disk are cleared out first (e.g. a FLAC
+  this tool converted to MP3 and deleted). This isn't just to avoid a
+  rejection: even one stale record can crash Lidarr's manual-import scan
+  outright (a 500 - its `AugmentingService` throws trying to read the
+  missing file), which aborts the whole scan rather than just failing
+  that one file - so this runs proactively, before scanning, not just
+  reactively after seeing a rejection. Same approach as the proven
   [TheCaptain989/lidarr-flac2mp3](https://github.com/TheCaptain989/lidarr-flac2mp3)
   script, rather than a blanket library rescan. **Note**: `DELETE
   /api/v1/trackfile` removes the actual file, not just the database row,
   so this only ever deletes a record after confirming (via a real
   filesystem check) that its file is genuinely gone - never every record
-  for the album. This is exactly why getting the path mapping right
+  for the artist. This is exactly why getting the path mapping right
   (above) matters: without it, this check can't tell a missing file from
   one it simply can't see.
 - Large batches are submitted in chunks of 20 files at a time (with a
@@ -128,6 +131,15 @@ In the window:
   comes back completely unmatched, even ones that are otherwise perfectly
   identifiable (e.g. via this tool's own AcoustID check). Passing
   `artistId` sidesteps that name lookup altogether.
+- After submitting, waiting for Lidarr to finish uses two separate
+  budgets: a generous one for merely being *queued* (a busy instance can
+  easily have other large, unrelated jobs ahead of it - e.g. a library
+  rescan working through thousands of tracks - which is normal
+  scheduling, not a stuck command), and a tighter one once Lidarr
+  actually starts *running* it. A submission that's still validly queued
+  when this tool gives up isn't lost - it stays queued in Lidarr and
+  completes on its own; you'd just see a "still queued" message instead
+  of a result.
 - Lidarr reads the files' own embedded tags to propose matches. Since
   this tool preserves full MusicBrainz/AcoustID tags through conversion,
   well-tagged files are usually auto-matched with no input needed.

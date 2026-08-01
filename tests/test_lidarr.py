@@ -119,13 +119,55 @@ def test_get_artist_id_for_path_does_not_false_match_a_similarly_named_prefix() 
 def test_import_folder_resolves_and_passes_artist_id() -> None:
     artist_response = Mock()
     artist_response.json.return_value = [{"id": 434, "path": "/music/Jelly Roll"}]
+    artist_trackfiles_response = Mock()
+    artist_trackfiles_response.json.return_value = []  # nothing stale to clear
     candidates_response = Mock()
     candidates_response.json.return_value = []
 
-    with patch("requests.get", side_effect=[artist_response, candidates_response]) as get:
+    with patch(
+        "requests.get", side_effect=[artist_response, artist_trackfiles_response, candidates_response]
+    ) as get:
         lidarr.import_folder("http://localhost:8686", "key", Path("/music/Jelly Roll"))
 
-    assert get.call_args_list[1].kwargs["params"]["artistId"] == 434
+    assert get.call_args_list[2].kwargs["params"]["artistId"] == 434
+
+
+def test_import_folder_clears_artist_stale_trackfiles_before_scanning_to_avoid_scan_crash(
+    tmp_path: Path,
+) -> None:
+    # Even one stale trackfile can crash Lidarr's manual-import scan
+    # entirely (a 500 from its AugmentingService trying to read the
+    # missing file) rather than a clean per-file rejection - so stale
+    # records for the resolved artist are cleared proactively, before the
+    # scan runs at all, not just reactively after seeing a rejection.
+    (tmp_path / "still-here.mp3").write_bytes(b"data")
+
+    artist_response = Mock()
+    artist_response.json.return_value = [{"id": 434, "path": "/music/Jelly Roll"}]
+    artist_trackfiles_response = Mock()
+    artist_trackfiles_response.json.return_value = [
+        {"id": 1, "path": "/music/Jelly Roll/gone.flac"},  # stale: file doesn't exist
+        {"id": 2, "path": "/music/Jelly Roll/still-here.mp3"},  # not stale: exists
+    ]
+    candidates_response = Mock()
+    candidates_response.json.return_value = []
+
+    with (
+        patch(
+            "requests.get", side_effect=[artist_response, artist_trackfiles_response, candidates_response]
+        ),
+        patch("requests.delete", return_value=Mock()) as delete,
+    ):
+        lidarr.import_folder(
+            "http://localhost:8686",
+            "key",
+            Path("/music/Jelly Roll"),
+            local_root=str(tmp_path),
+            lidarr_root="/music/Jelly Roll",
+        )
+
+    deleted_ids = [call.args[0].rsplit("/", 1)[-1] for call in delete.call_args_list]
+    assert deleted_ids == ["1"]
 
 
 def test_get_manual_import_candidates_raises_clear_error_on_timeout() -> None:
@@ -222,6 +264,35 @@ def test_wait_for_command_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
     with patch("requests.get", return_value=response), patch("time.sleep"):
         with pytest.raises(lidarr.LidarrError, match="Timed out"):
             lidarr.wait_for_command("http://localhost:8686", "key", 42, timeout=1.0)
+
+
+def test_wait_for_command_does_not_time_out_while_merely_queued(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Being queued behind other, unrelated Lidarr work (e.g. a large
+    # library rescan) is normal - it must not trip the tight "started"
+    # timeout just because a lot of wall-clock time passes while queued.
+    responses = [Mock(), Mock(), Mock()]
+    responses[0].json.return_value = {"status": "queued"}
+    responses[1].json.return_value = {"status": "queued"}
+    responses[2].json.return_value = {"status": "completed"}
+
+    # Simulate a long time passing while queued (longer than `timeout`,
+    # the started-phase budget) without ever reporting "started".
+    times = iter([0.0, 0.0, 500.0])
+    monkeypatch.setattr(lidarr.time, "monotonic", lambda: next(times))
+
+    with patch("requests.get", side_effect=responses), patch("time.sleep"):
+        result = lidarr.wait_for_command("http://localhost:8686", "key", 42, timeout=1.0, queue_timeout=10_000.0)
+
+    assert result == {"status": "completed"}
+
+
+def test_wait_for_command_times_out_while_queued_too_long() -> None:
+    response = Mock()
+    response.json.return_value = {"status": "queued"}
+
+    with patch("requests.get", return_value=response), patch("time.sleep"):
+        with pytest.raises(lidarr.LidarrError, match="still queued"):
+            lidarr.wait_for_command("http://localhost:8686", "key", 42, queue_timeout=0.01)
 
 
 def test_skip_reason_prefers_lidarr_rejection_text() -> None:
