@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""KDE/Qt window to recursively transcode a folder of FLAC files to MP3."""
+"""AcoustID: a KDE/Qt window to recursively transcode a folder of FLAC files
+to MP3, with an optional AcoustID/MusicBrainz identity check."""
 
 from __future__ import annotations
 
@@ -121,7 +122,7 @@ class BatchConverter(QThread):
         try:
             return self.log_path.open("a", encoding="utf-8")
         except OSError:
-            fallback_dir = Path.home() / ".local" / "share" / "flac2mp3" / "logs"
+            fallback_dir = Path.home() / ".local" / "share" / "AcoustID" / "logs"
             fallback_dir.mkdir(parents=True, exist_ok=True)
             self.log_path = fallback_dir / self.log_path.name
             return self.log_path.open("a", encoding="utf-8")
@@ -147,17 +148,18 @@ class BatchConverter(QThread):
 class MainWindow(QMainWindow):
     def __init__(self, initial_folder: Path | None = None) -> None:
         super().__init__()
-        self.setWindowTitle(f"flac2mp3 v{__version__}")
+        self.setWindowTitle(f"AcoustID v{__version__}")
         self.resize(760, 480)
 
         self.files: list[Path] = []
         self.converter: BatchConverter | None = None
-        self.settings = QSettings("flac2mp3", "flac2mp3")
+        self.settings = QSettings("AcoustID", "AcoustID")
         self._acoustid_only_run = False
 
         self._build_ui()
-        if initial_folder is not None:
-            self._set_folder(initial_folder)
+        folder = initial_folder or self._last_folder()
+        if folder is not None:
+            self._set_folder(folder)
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -254,6 +256,12 @@ class MainWindow(QMainWindow):
     def _save_quality_setting(self) -> None:
         self.settings.setValue("quality", self.quality_combo.currentData())
 
+    def _last_folder(self) -> Path | None:
+        last = self.settings.value("last_folder")
+        if last and Path(last).is_dir():
+            return Path(last)
+        return None
+
     def _browse_folder(self) -> None:
         start_dir = self.folder_edit.text() or str(Path.home())
         chosen = QFileDialog.getExistingDirectory(self, "Select Music Folder", start_dir)
@@ -262,6 +270,7 @@ class MainWindow(QMainWindow):
 
     def _set_folder(self, folder: Path) -> None:
         self.folder_edit.setText(str(folder))
+        self.settings.setValue("last_folder", str(folder))
         self.files = core.find_flac_files(folder)
         self._populate_table()
         self.start_button.setEnabled(bool(self.files))
@@ -285,11 +294,11 @@ class MainWindow(QMainWindow):
 
     def _require_acoustid_apikey(self) -> str | None:
         if not core.check_fpcalc():
-            QMessageBox.critical(self, "flac2mp3", "The AcoustID check needs fpcalc (chromaprint) on PATH.")
+            QMessageBox.critical(self, "AcoustID", "The AcoustID check needs fpcalc (chromaprint) on PATH.")
             return None
         apikey = self.acoustid_key_edit.text().strip()
         if not apikey:
-            QMessageBox.critical(self, "flac2mp3", "The AcoustID check needs an API key.")
+            QMessageBox.critical(self, "AcoustID", "The AcoustID check needs an API key.")
             return None
         return apikey
 
@@ -310,7 +319,7 @@ class MainWindow(QMainWindow):
     def _run_batch(self, acoustid_apikey: str | None, acoustid_only: bool) -> None:
         folder = Path(self.folder_edit.text())
         quality = self.quality_combo.currentData()
-        prefix = "acoustid-check" if acoustid_only else "flac2mp3"
+        prefix = "acoustid-check" if acoustid_only else "acoustid-convert"
         log_path = folder / f"{prefix}-{datetime.now():%Y%m%d-%H%M%S}.log"
 
         self._acoustid_only_run = acoustid_only
@@ -404,7 +413,7 @@ class MainWindow(QMainWindow):
 def main() -> None:
     app = QApplication(sys.argv)
     if not core.check_ffmpeg():
-        QMessageBox.critical(None, "flac2mp3", "ffmpeg is required but was not found on PATH.")
+        QMessageBox.critical(None, "AcoustID", "ffmpeg is required but was not found on PATH.")
         sys.exit(1)
 
     initial_folder = Path(sys.argv[1]) if len(sys.argv) > 1 else None

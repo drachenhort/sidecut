@@ -1,7 +1,7 @@
-# flac2mp3
+# AcoustID
 
 A native Qt/KDE window to recursively transcode a folder of FLAC files to
-MP3, in place.
+MP3, in place, with an optional AcoustID/MusicBrainz identity check.
 
 ## Requirements
 
@@ -17,14 +17,15 @@ MP3, in place.
 ## Usage
 
 ```bash
-python3 flac2mp3.py                  # opens the window, folder unset
-python3 flac2mp3.py /path/to/music   # opens the window with the folder pre-filled
+python3 acoustid.py                  # opens the window, remembers the last folder used
+python3 acoustid.py /path/to/music   # opens the window with the folder pre-filled
 ```
 
 In the window:
 
 1. **Browse...** to pick the folder to scan recursively (native KDE folder
-   dialog).
+   dialog). The chosen folder is remembered (Qt `QSettings`) and reopened
+   automatically next time, unless a folder is passed on the command line.
 2. Choose a **quality** preset and the number of **parallel jobs**.
 3. Optionally tick **Check AcoustID** and enter an AcoustID API key to
    fingerprint each file and compare it against MusicBrainz before
@@ -63,8 +64,9 @@ In the window:
   else is kept as a `TXXX` frame so nothing is silently dropped.
 - Embedded cover art (front/back covers, etc.) is copied as ID3 `APIC`
   frames.
-- A log file `flac2mp3-<timestamp>.log` is written in the scanned root
-  folder, containing ffmpeg output for any failures.
+- A log file `acoustid-convert-<timestamp>.log` (or
+  `acoustid-check-<timestamp>.log` for an AcoustID-only run) is written in
+  the scanned root folder, containing ffmpeg output for any failures.
 - Re-running on the same folder is safe: files that already converted no
   longer have a `.flac` source and are skipped automatically, so an
   interrupted run on a large library can simply be restarted.
@@ -73,7 +75,7 @@ In the window:
 
 - `core.py` — framework-agnostic conversion logic (scanning, ffmpeg
   invocation, tag/picture copying); no Qt dependency, directly unit tested.
-- `flac2mp3.py` — the PySide6 window and its background conversion thread.
+- `acoustid.py` — the PySide6 window and its background conversion thread.
 
 ## Tests
 

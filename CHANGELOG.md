@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- Renamed the program from flac2mp3 to AcoustID: `flac2mp3.py` is now
+  `acoustid.py`, the window title and the `QSettings` org/app identifiers
+  changed to "AcoustID" (previously saved settings under the old
+  "flac2mp3" identifier are not carried over), and the conversion log
+  prefix changed from `flac2mp3-` to `acoustid-convert-`.
+
+### Added
+- The last folder opened (via **Browse...** or on the command line) is
+  now remembered between runs and reopened automatically on launch.
+
 ### Fixed
 - AcoustID errors (e.g. an invalid API key) showed a useless generic
   "400 Client Error" dump instead of the actual reason. AcoustID's JSON

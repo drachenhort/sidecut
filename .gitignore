@@ -2,5 +2,5 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-flac2mp3-*.log
+acoustid-*.log
 test-flac/
