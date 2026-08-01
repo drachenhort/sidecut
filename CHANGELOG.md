@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.5]
+
 ### Added
 - **Auto-correct mismatched MBID** now also backfills a missing
   `releasetype` tag (Album/EP/Single/Compilation/...) from AcoustID/
