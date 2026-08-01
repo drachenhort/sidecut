@@ -20,6 +20,13 @@ All notable changes to this project are documented in this file.
   dialog for a checkbox left on before setup was finished).
 
 ### Fixed
+- A large import (e.g. importing a ~100-track discography in one go
+  after a big conversion batch) submitted every matched file in a single
+  ManualImport command and cleared stale TrackFile records with an
+  unpaced burst of DELETE calls - both of which could overwhelm or time
+  out against a real Lidarr instance. Large batches are now submitted in
+  chunks of `IMPORT_BATCH_SIZE` (20) files with a short pause between
+  chunks, and stale-trackfile deletions are similarly paced out.
 - The manual-import folder scan used the same 30s timeout as quick
   metadata calls, but it does real per-file work server-side (reading
   embedded tags, matching releases) - a large folder or a busy Lidarr

@@ -222,6 +222,27 @@ def test_clear_stale_trackfiles_only_deletes_records_whose_file_is_actually_gone
     assert still_there.exists()  # never touched
 
 
+def test_clear_stale_trackfiles_paces_out_multiple_deletes(tmp_path: Path) -> None:
+    # Many stale records (e.g. clearing a whole discography at once)
+    # shouldn't fire a burst of DELETE calls back-to-back.
+    list_response = Mock()
+    list_response.json.return_value = [
+        {"id": 1, "path": str(tmp_path / "01.flac")},
+        {"id": 2, "path": str(tmp_path / "02.flac")},
+        {"id": 3, "path": str(tmp_path / "03.flac")},
+    ]
+
+    with (
+        patch("requests.get", return_value=list_response),
+        patch("requests.delete", return_value=Mock()),
+        patch("time.sleep") as sleep,
+    ):
+        count = lidarr.clear_stale_trackfiles("http://localhost:8686", "key", 5)
+
+    assert count == 3
+    assert sleep.call_count == 2  # a pause between each of the 3 deletes, not before the first
+
+
 def test_clear_stale_trackfiles_skips_when_parent_directory_is_unreachable(tmp_path: Path) -> None:
     # If we can't even see the containing folder, this machine likely
     # isn't looking at the same filesystem Lidarr is (e.g. a cross-host
@@ -275,6 +296,33 @@ def test_import_folder_remaps_folder_to_lidarrs_path_before_scanning() -> None:
         )
 
     assert get.call_args.kwargs["params"]["folder"] == "/music/Artist"
+
+
+def test_import_folder_submits_large_batches_in_chunks() -> None:
+    # 45 matched files with IMPORT_BATCH_SIZE=20 should become 3 separate
+    # ManualImport commands (20, 20, 5) rather than one command for all
+    # 45 at once - a single huge command is what was overwhelming a real
+    # Lidarr instance.
+    candidates = [_matched_candidate(f"/music/{i:03d}.mp3", track_id=i) for i in range(45)]
+    candidates_response = Mock()
+    candidates_response.json.return_value = candidates
+
+    post_response = Mock()
+    post_response.json.return_value = {"id": 1}
+    wait_response = Mock()
+    wait_response.json.return_value = {"status": "completed"}
+
+    with (
+        patch("requests.get", side_effect=[candidates_response, wait_response, wait_response, wait_response]),
+        patch("requests.post", return_value=post_response) as post,
+        patch("time.sleep") as sleep,
+    ):
+        imported, skipped, skipped_names = lidarr.import_folder("http://localhost:8686", "key", Path("/music"))
+
+    assert imported == 45
+    assert skipped == 0
+    assert [len(call.kwargs["json"]["files"]) for call in post.call_args_list] == [20, 20, 5]
+    assert sleep.call_count == 2  # a pause between each of the 3 batches, not before the first
 
 
 def test_import_folder_only_submits_matched_candidates() -> None:

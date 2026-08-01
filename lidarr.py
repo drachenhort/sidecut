@@ -42,6 +42,18 @@ REQUEST_TIMEOUT = 30.0
 MANUAL_IMPORT_SCAN_TIMEOUT = 180.0
 COMMAND_POLL_INTERVAL = 1.0
 COMMAND_POLL_TIMEOUT = 300.0
+# A single ManualImport command covering a huge batch (e.g. importing a
+# ~100-track discography in one go) makes Lidarr do a lot of matching/
+# moving work synchronously in one request, which can time out or bog
+# down an already-loaded instance. Submitting in smaller batches, with a
+# short pause between them, keeps each individual command manageable and
+# spreads the load out instead of hitting Lidarr with everything at once.
+IMPORT_BATCH_SIZE = 20
+IMPORT_BATCH_PAUSE = 2.0
+# Likewise for clearing stale TrackFile records: a batch spanning many
+# albums/tracks means many individual DELETE calls - pace them out rather
+# than firing them back-to-back.
+TRACKFILE_DELETE_PAUSE = 0.5
 
 
 class LidarrError(Exception):
@@ -272,6 +284,8 @@ def clear_stale_trackfiles(
             continue
         if local_path.exists():
             continue
+        if deleted:
+            time.sleep(TRACKFILE_DELETE_PAUSE)
         delete_trackfile(base_url, api_key, trackfile["id"])
         deleted += 1
     return deleted
@@ -319,27 +333,40 @@ def import_folder(
     folder sent to Lidarr's API matches its own filesystem view - otherwise
     Lidarr will silently find nothing at a path that doesn't exist for it.
 
+    A large batch of matched files is submitted in chunks of
+    IMPORT_BATCH_SIZE (with a short pause between chunks) rather than one
+    huge command, so importing e.g. a full discography at once doesn't
+    hand Lidarr one enormous synchronous operation to process.
+
     Returns (imported_count, skipped_count, skipped_file_descriptions),
     where each skipped description includes Lidarr's own rejection reason.
     Never raises for individual unmatched files - only for connectivity/API
-    failures or a Lidarr-reported import failure."""
+    failures or a Lidarr-reported import failure (which stops further
+    batches - already-imported batches stay imported)."""
     lidarr_folder = remap_path_to_lidarr(folder, local_root, lidarr_root)
     candidates = get_manual_import_candidates(base_url, api_key, lidarr_folder)
 
     stale_album_ids = {c["album"]["id"] for c in candidates if has_existing_file_rejection(c)}
+    for i, album_id in enumerate(stale_album_ids):
+        if i:
+            time.sleep(TRACKFILE_DELETE_PAUSE)
+        clear_stale_trackfiles(base_url, api_key, album_id, local_root, lidarr_root)
     if stale_album_ids:
-        for album_id in stale_album_ids:
-            clear_stale_trackfiles(base_url, api_key, album_id, local_root, lidarr_root)
         candidates = get_manual_import_candidates(base_url, api_key, lidarr_folder)
 
     matched = [c for c in candidates if is_fully_matched(c)]
     skipped = [c for c in candidates if not is_fully_matched(c)]
 
-    if matched:
-        command_id = submit_manual_import(base_url, api_key, matched, import_mode)
+    imported = 0
+    for i in range(0, len(matched), IMPORT_BATCH_SIZE):
+        if i:
+            time.sleep(IMPORT_BATCH_PAUSE)
+        batch = matched[i : i + IMPORT_BATCH_SIZE]
+        command_id = submit_manual_import(base_url, api_key, batch, import_mode)
         result = wait_for_command(base_url, api_key, command_id)
         if result.get("status") == "failed":
             raise LidarrError(f"Lidarr reported the import failed: {result.get('message', 'unknown error')}")
+        imported += len(batch)
 
     skipped_names = [f"{Path(c.get('path', '?')).name}: {skip_reason(c)}" for c in skipped]
-    return len(matched), len(skipped), skipped_names
+    return imported, len(skipped), skipped_names

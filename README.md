@@ -114,6 +114,11 @@ In the window:
   for the album. This is exactly why getting the path mapping right
   (above) matters: without it, this check can't tell a missing file from
   one it simply can't see.
+- Large batches are submitted in chunks of 20 files at a time (with a
+  short pause between chunks), and clearing stale TrackFile records is
+  similarly paced out, rather than one huge command or a burst of
+  requests all at once - useful when importing something like a full
+  discography rather than a single album.
 - Lidarr reads the files' own embedded tags to propose matches. Since
   this tool preserves full MusicBrainz/AcoustID tags through conversion,
   well-tagged files are usually auto-matched with no input needed.
