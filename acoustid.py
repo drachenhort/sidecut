@@ -100,9 +100,13 @@ class BatchConverter(QThread):
         self.workers = workers
         self.acoustid_apikey = acoustid_apikey
         self.acoustid_only = acoustid_only
-        # Never auto-correct on a check-only run: "Check AcoustID Only"
-        # promises files stay untouched, so this flag is ignored there.
+        # Never rewrite an existing musicbrainz_trackid on a check-only run:
+        # "Check AcoustID Only" promises tagged data stays untouched, so
+        # this is ignored there. Filling in a *missing* release-type tag is
+        # purely additive (never overwrites anything) and safe to allow on
+        # both check-only buttons - see acoustid_fill_release_type below.
         self.acoustid_autocorrect = acoustid_autocorrect and not acoustid_only
+        self.acoustid_fill_release_type = acoustid_autocorrect
         self._cancel_event = threading.Event()
 
     def cancel(self) -> None:
@@ -112,6 +116,8 @@ class BatchConverter(QThread):
         result = core.check_acoustid(path, self.acoustid_apikey)
         if self.acoustid_autocorrect:
             core.correct_acoustid_mismatch(path, result)
+        if self.acoustid_fill_release_type and core.apply_release_type(path, result):
+            log.write(f"AcoustID: {path}: filled missing release type '{result.release_type}'\n")
         log.write(f"AcoustID [{result.status}]: {path}: {result.detail}\n")
         self.acoustid_checked.emit(index, result.status, result.detail, result.corrected)
         return result
@@ -478,7 +484,13 @@ class MainWindow(QMainWindow):
             "When Check AcoustID finds a mismatch with a confident enough score "
             f"(>= {core.ACOUSTID_AUTOCORRECT_MIN_SCORE:.1f}), rewrite the FLAC's "
             "musicbrainz_trackid tag to AcoustID's suggested recording before converting.\n"
-            "Never applies during a Check AcoustID Only (or +MP3) run - those always leave files untouched."
+            "The MBID rewrite never applies during a Check AcoustID Only (or +MP3) run.\n"
+            "Also fills in a missing release-type tag (Album/EP/Single/Compilation/...) from "
+            "AcoustID's match on FLAC or MP3, whenever the file doesn't already have one - this "
+            "is what feeds the Collection Summary's release-type breakdown. Unlike the MBID "
+            "rewrite, this only ever adds a missing tag (never overwrites), so it also runs "
+            "during both Check AcoustID buttons - handy for backfilling an already-converted "
+            "MP3 library."
         )
         self.acoustid_autocorrect_checkbox.setChecked(self.settings.value("acoustid_autocorrect", False, type=bool))
         self.acoustid_autocorrect_checkbox.toggled.connect(self._save_acoustid_settings)
@@ -497,7 +509,9 @@ class MainWindow(QMainWindow):
         self.checkonly_mp3_button.setToolTip(
             "Scans this folder for both .flac and .mp3 files and runs the AcoustID check on\n"
             "all of them. Only affects this button: Start and Check AcoustID Only still only\n"
-            "see .flac files. Files are never converted or modified by this."
+            "see .flac files. Files are never converted, and existing tags are never rewritten -\n"
+            "the one exception is a missing release-type tag, which gets filled in when\n"
+            "Auto-correct is checked (see its tooltip)."
         )
         self.checkonly_mp3_button.setEnabled(False)
         self.checkonly_mp3_button.clicked.connect(self._start_mp3_acoustid_check)

@@ -339,6 +339,182 @@ def test_check_acoustid_reports_identified_when_untagged(tmp_path: Path) -> None
     assert result.recording_id == "mb-track-1"
 
 
+def _fake_acoustid_get(recordings_data: dict, releasegroups_data: dict):
+    # The real AcoustID API only honors one `meta` mode per request, so
+    # check_acoustid makes two separate calls (one meta=recordings, one
+    # meta=releasegroups) - this stub routes each to its own canned
+    # response the same way, based on the `meta` query param.
+    def fake_get(url, params=None, timeout=None):
+        data = releasegroups_data if params.get("meta") == "releasegroups" else recordings_data
+        response = Mock()
+        response.json.return_value = data
+        return response
+
+    return fake_get
+
+
+def test_check_acoustid_surfaces_release_type_from_releasegroups(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src)
+    recordings_data = {
+        "status": "ok",
+        "results": [{"id": "acoustid-1", "score": 0.9, "recordings": [{"id": "mb-track-1", "title": "Song"}]}],
+    }
+    releasegroups_data = {
+        "status": "ok",
+        "results": [{"id": "acoustid-1", "score": 0.9, "releasegroups": [{"id": "rg-1", "type": "Album"}]}],
+    }
+
+    with patch("subprocess.run", side_effect=_fake_fpcalc_run), patch(
+        "requests.get", side_effect=_fake_acoustid_get(recordings_data, releasegroups_data)
+    ):
+        result = core.check_acoustid(src, "fake-api-key")
+
+    assert result.release_type == "album"
+
+
+def test_check_acoustid_prefers_release_group_matching_tagged_album(tmp_path: Path) -> None:
+    # A recording can belong to many release groups (original album +
+    # every compilation it's ever appeared on), so picking the first one
+    # blindly is unreliable. When the file is already tagged with an album
+    # name, match against that release group specifically instead.
+    src = tmp_path / "song.flac"
+    make_flac(src, album="Greatest Hits")
+    recordings_data = {
+        "status": "ok",
+        "results": [{"id": "acoustid-1", "score": 0.9, "recordings": [{"id": "mb-track-1", "title": "Song"}]}],
+    }
+    releasegroups_data = {
+        "status": "ok",
+        "results": [{
+            "id": "acoustid-1",
+            "score": 0.9,
+            "releasegroups": [
+                {"id": "rg-1", "title": "Original Album", "type": "Album"},
+                {"id": "rg-2", "title": "Greatest Hits", "type": "Album", "secondarytypes": ["Compilation"]},
+            ],
+        }],
+    }
+
+    with patch("subprocess.run", side_effect=_fake_fpcalc_run), patch(
+        "requests.get", side_effect=_fake_acoustid_get(recordings_data, releasegroups_data)
+    ):
+        result = core.check_acoustid(src, "fake-api-key")
+
+    assert result.release_type == "compilation"
+
+
+def test_check_acoustid_falls_back_to_first_group_without_album_match(tmp_path: Path) -> None:
+    # No album tag (or no matching release group) to disambiguate with, so
+    # this must NOT blindly prefer "Compilation" - most popular songs have
+    # a compilation release group even when the file is from the original
+    # studio album, so that would mislabel most of a library.
+    src = tmp_path / "song.flac"
+    make_flac(src)
+    recordings_data = {
+        "status": "ok",
+        "results": [{"id": "acoustid-1", "score": 0.9, "recordings": [{"id": "mb-track-1", "title": "Song"}]}],
+    }
+    releasegroups_data = {
+        "status": "ok",
+        "results": [{
+            "id": "acoustid-1",
+            "score": 0.9,
+            "releasegroups": [
+                {"id": "rg-1", "title": "Original Album", "type": "Album"},
+                {"id": "rg-2", "title": "Greatest Hits", "type": "Album", "secondarytypes": ["Compilation"]},
+            ],
+        }],
+    }
+
+    with patch("subprocess.run", side_effect=_fake_fpcalc_run), patch(
+        "requests.get", side_effect=_fake_acoustid_get(recordings_data, releasegroups_data)
+    ):
+        result = core.check_acoustid(src, "fake-api-key")
+
+    assert result.release_type == "album"
+
+
+def test_check_acoustid_release_type_none_without_releasegroups(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src)
+    recordings_data = {
+        "status": "ok",
+        "results": [{"id": "acoustid-1", "score": 0.9, "recordings": [{"id": "mb-track-1", "title": "Song"}]}],
+    }
+    releasegroups_data = {"status": "ok", "results": [{"id": "acoustid-1", "score": 0.9}]}
+
+    with patch("subprocess.run", side_effect=_fake_fpcalc_run), patch(
+        "requests.get", side_effect=_fake_acoustid_get(recordings_data, releasegroups_data)
+    ):
+        result = core.check_acoustid(src, "fake-api-key")
+
+    assert result.release_type is None
+
+
+def test_apply_release_type_writes_missing_tag(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src)
+    result = core.AcoustIDCheck("identified", "detail", "mb-track-1", 0.9, release_type="ep")
+
+    applied = core.apply_release_type(src, result)
+
+    assert applied is True
+    assert FLAC(src)["releasetype"] == ["ep"]
+
+
+def test_apply_release_type_never_overwrites_existing_tag(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src, releasetype="single")
+    result = core.AcoustIDCheck("identified", "detail", "mb-track-1", 0.9, release_type="album")
+
+    applied = core.apply_release_type(src, result)
+
+    assert applied is False
+    assert FLAC(src)["releasetype"] == ["single"]
+
+
+def test_apply_release_type_skips_when_no_release_type(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src)
+    result = core.AcoustIDCheck("no_match", "detail")
+
+    assert core.apply_release_type(src, result) is False
+
+
+def test_apply_release_type_writes_missing_tag_on_mp3(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src, artist="Artist", title="Song")
+    with open("/dev/null", "w") as log:
+        assert core.convert_one(src, core.QUALITY_PRESETS["v0"], log).ok
+    mp3 = tmp_path / "song.mp3"
+    result = core.AcoustIDCheck("identified", "detail", "mb-track-1", 0.9, release_type="ep")
+
+    applied = core.apply_release_type(mp3, result)
+
+    assert applied is True
+    frame = ID3(mp3).get("TXXX:MusicBrainz Album Type")
+    assert frame.text == ["ep"]
+
+
+def test_apply_release_type_never_overwrites_existing_tag_on_mp3(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src, artist="Artist", title="Song")
+    with open("/dev/null", "w") as log:
+        assert core.convert_one(src, core.QUALITY_PRESETS["v0"], log).ok
+    mp3 = tmp_path / "song.mp3"
+    id3 = ID3(mp3)
+    id3.add(core.TXXX(encoding=3, desc="MusicBrainz Album Type", text="single"))
+    id3.save(mp3, v2_version=3)
+    result = core.AcoustIDCheck("identified", "detail", "mb-track-1", 0.9, release_type="album")
+
+    applied = core.apply_release_type(mp3, result)
+
+    assert applied is False
+    frame = ID3(mp3).get("TXXX:MusicBrainz Album Type")
+    assert frame.text == ["single"]
+
+
 def test_check_acoustid_reads_existing_tags_from_mp3(tmp_path: Path) -> None:
     # check_acoustid must work on already-converted MP3s (not just FLACs),
     # reading the recording ID from the ID3 UFID frame Picard/this tool

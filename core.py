@@ -188,6 +188,7 @@ class AcoustIDCheck:
     recording_id: str | None = None
     score: float | None = None
     corrected: bool = False
+    release_type: str | None = None
 
 
 @dataclass
@@ -233,7 +234,12 @@ def _fpcalc_fingerprint(path: Path) -> tuple[int, str]:
     return int(data["duration"]), data["fingerprint"]
 
 
-def _acoustid_lookup(api_key: str, duration: int, fingerprint: str) -> dict:
+def _acoustid_lookup(api_key: str, duration: int, fingerprint: str, meta: str = "recordings") -> dict:
+    # AcoustID's lookup endpoint only honors one `meta` mode per request -
+    # combining values ("recordings+releasegroups" or repeated `meta=`
+    # params) silently drops everything but the last one, verified against
+    # the live API. Getting both recording info and release-group/type info
+    # for the same match takes two separate requests; see check_acoustid.
     _acoustid_rate_limiter.wait()
     response = requests.get(
         ACOUSTID_LOOKUP_URL,
@@ -241,7 +247,7 @@ def _acoustid_lookup(api_key: str, duration: int, fingerprint: str) -> dict:
             "client": api_key,
             "duration": duration,
             "fingerprint": fingerprint,
-            "meta": "recordings",
+            "meta": meta,
             "format": "json",
         },
         timeout=15,
@@ -257,13 +263,16 @@ def _acoustid_lookup(api_key: str, duration: int, fingerprint: str) -> dict:
         raise
 
 
-def _read_existing_recording(path: Path) -> tuple[str | None, str, str]:
-    """Read the existing MusicBrainz recording ID (if any) plus artist/title,
-    from either a FLAC (Vorbis comments) or an MP3 (ID3v2) file, so
-    check_acoustid can compare against whichever format it's given."""
+def _read_existing_recording(path: Path) -> tuple[str | None, str, str, str]:
+    """Read the existing MusicBrainz recording ID (if any) plus
+    artist/title/album, from either a FLAC (Vorbis comments) or an MP3
+    (ID3v2) file, so check_acoustid can compare against whichever format
+    it's given, and pick a release type for the specific release this file
+    is already tagged as belonging to (see _pick_release_type)."""
     existing_id: str | None = None
     artist = ""
     title = ""
+    album = ""
     suffix = path.suffix.lower()
     if suffix == ".flac":
         tags = FLAC(path)
@@ -272,6 +281,7 @@ def _read_existing_recording(path: Path) -> tuple[str | None, str, str]:
             existing_id = values[0]
         artist = "; ".join(tags.get("artist", []))
         title = "; ".join(tags.get("title", []))
+        album = "; ".join(tags.get("album", []))
     elif suffix == ".mp3":
         id3 = ID3(path)
         ufid = id3.get(f"UFID:{_UFID_OWNER}")
@@ -281,7 +291,100 @@ def _read_existing_recording(path: Path) -> tuple[str | None, str, str]:
             artist = "; ".join(id3["TPE1"].text)
         if "TIT2" in id3:
             title = "; ".join(id3["TIT2"].text)
-    return existing_id, artist, title
+        if "TALB" in id3:
+            album = "; ".join(id3["TALB"].text)
+    return existing_id, artist, title, album
+
+
+def _pick_release_type(releasegroups: list[dict], tagged_album: str = "") -> str | None:
+    """Pick one MusicBrainz release type off a matched result's
+    `releasegroups` list (present when _acoustid_lookup is called with
+    `meta="releasegroups"` - note this is attached to the *result*, not to
+    individual recordings).
+
+    A recording can belong to many release groups - its original album,
+    plus every compilation/reissue that ever included it - so a popular
+    track almost always has at least one "Compilation" group in the list
+    even when the file at hand is tagged from the original studio album.
+    Blindly preferring "Compilation" therefore mislabels most well-known
+    songs. Instead: if the file already has an `album` tag, prefer the
+    release group whose title matches it (case-insensitively) - that's the
+    specific release this file actually belongs to. Otherwise fall back to
+    the first group in the list, which AcoustID/MusicBrainz orders with the
+    original release first. Returns lowercase to match the Vorbis
+    `releasetype` convention Picard uses."""
+    if tagged_album:
+        for group in releasegroups:
+            if group.get("title", "").strip().casefold() == tagged_album.strip().casefold():
+                if "Compilation" in (group.get("secondarytypes") or []):
+                    return "compilation"
+                release_type = group.get("type")
+                if release_type:
+                    return release_type.lower()
+    for group in releasegroups:
+        release_type = group.get("type")
+        if release_type:
+            return release_type.lower()
+    return None
+
+
+def _lookup_release_type(
+    api_key: str, duration: int, fingerprint: str, result_id: str | None, tagged_album: str = ""
+) -> str | None:
+    """Re-query AcoustID with `meta="releasegroups"` for the same
+    fingerprint, and pick out the release type attached to the specific
+    result `check_acoustid` already matched (by its AcoustID result id,
+    stable across separate lookups of the same fingerprint). A second
+    request is required because the API only honors one `meta` mode per
+    call - see _acoustid_lookup. `tagged_album`, if known, lets
+    _pick_release_type prefer the release group matching this file's
+    existing album tag over blindly picking the first one. Never raises:
+    any failure just means no release type, not a failed check."""
+    if not result_id:
+        return None
+    try:
+        data = _acoustid_lookup(api_key, duration, fingerprint, meta="releasegroups")
+    except requests.RequestException:
+        return None
+    if data.get("status") != "ok":
+        return None
+    for result in data.get("results", []):
+        if result.get("id") == result_id:
+            return _pick_release_type(result.get("releasegroups") or [], tagged_album)
+    return None
+
+
+_ALBUM_TYPE_DESC = "MusicBrainz Album Type"
+
+
+def apply_release_type(path: Path, result: AcoustIDCheck) -> bool:
+    """If `result` carries a release type from AcoustID/MusicBrainz and
+    `path` has no release-type tag yet, write one: the `releasetype` Vorbis
+    comment on a FLAC, or the equivalent TXXX:MusicBrainz Album Type ID3
+    frame on an already-converted MP3. This is the tag
+    library_stats.scan_release_types reads for the Collection Summary.
+    Never overwrites an existing value - only fills in a gap, unlike
+    correct_acoustid_mismatch which is FLAC-only because it rewrites data
+    that already exists."""
+    if not result.release_type:
+        return False
+    suffix = path.suffix.lower()
+    if suffix == ".flac":
+        tags = FLAC(path)
+        if tags.get("releasetype"):
+            return False
+        tags["releasetype"] = [result.release_type]
+        tags.save()
+        return True
+    if suffix == ".mp3":
+        id3 = ID3(path)
+        frame = id3.get(f"TXXX:{_ALBUM_TYPE_DESC}")
+        if frame and frame.text:
+            return False
+        id3.add(TXXX(encoding=3, desc=_ALBUM_TYPE_DESC, text=result.release_type))
+        id3.save(path, v2_version=3)
+        return True
+    return False
 
 
 def check_acoustid(path: Path, api_key: str) -> AcoustIDCheck:
@@ -320,13 +423,19 @@ def check_acoustid(path: Path, api_key: str) -> AcoustIDCheck:
     existing_id: str | None = None
     tagged_artist = ""
     tagged_title = ""
+    tagged_album = ""
     with contextlib.suppress(Exception):
-        existing_id, tagged_artist, tagged_title = _read_existing_recording(path)
+        existing_id, tagged_artist, tagged_title, tagged_album = _read_existing_recording(path)
+
+    release_type = _lookup_release_type(api_key, duration, fingerprint, best.get("id"), tagged_album)
 
     best_id = recording_ids[0] if recording_ids else None
     if existing_id:
         if existing_id in recording_ids:
-            return AcoustIDCheck("match", f"Matches tagged recording (score {score:.2f})", existing_id, score)
+            return AcoustIDCheck(
+                "match", f"Matches tagged recording (score {score:.2f})", existing_id, score,
+                release_type=release_type,
+            )
         tagged = f"{tagged_artist} - {tagged_title}".strip(" -") or existing_id
         if summary:
             detail = (
@@ -338,12 +447,12 @@ def check_acoustid(path: Path, api_key: str) -> AcoustIDCheck:
                 f"Tagged as '{tagged}' (MBID {existing_id}), but AcoustID's match "
                 f"(score {score:.2f}) has no linked MusicBrainz recording to compare against"
             )
-        return AcoustIDCheck("mismatch", detail, best_id, score)
+        return AcoustIDCheck("mismatch", detail, best_id, score, release_type=release_type)
     if summary:
         detail = f"AcoustID suggests '{summary}' (MBID {best_id}, score {score:.2f})"
-        return AcoustIDCheck("identified", detail, best_id, score)
+        return AcoustIDCheck("identified", detail, best_id, score, release_type=release_type)
     detail = f"AcoustID match found but has no linked MusicBrainz recording (score {score:.2f})"
-    return AcoustIDCheck("identified", detail, None, score)
+    return AcoustIDCheck("identified", detail, None, score, release_type=release_type)
 
 
 def correct_acoustid_mismatch(path: Path, result: AcoustIDCheck, min_score: float = ACOUSTID_AUTOCORRECT_MIN_SCORE) -> bool:

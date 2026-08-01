@@ -57,9 +57,16 @@ In the window:
   fix itself: the FLAC's `musicbrainz_trackid` tag is rewritten to
   AcoustID's suggested recording (only the ID — artist/title/etc. are left
   alone) before the file converts, but only when AcoustID's score is
-  >= 0.5. Corrected rows show "Mismatch (fixed)". This never applies
-  during a **Check AcoustID Only** (or **+MP3**) run, which always leave
-  files untouched regardless of this checkbox.
+  >= 0.5. Corrected rows show "Mismatch (fixed)". This rewrite never
+  applies during a **Check AcoustID Only** (or **+MP3**) run, which always
+  leave already-tagged data untouched regardless of this checkbox.
+- The same checkbox also fills in a missing release-type tag (Album, EP,
+  Single, Compilation, ...) from AcoustID's match — the tag the Collection
+  Summary's release-type breakdown reads. Unlike the MBID rewrite, this
+  only ever adds a tag that's missing, never overwrites an existing one, so
+  it runs on **FLAC and MP3** and applies during **every** AcoustID
+  check/run, including both check-only buttons — the way to backfill an
+  already-converted MP3 library without reconverting it.
 - Lookups are capped at 4 requests/second total, no matter how many
   parallel jobs are configured — workers block on a shared limiter rather
   than each hammering the API independently.
@@ -67,8 +74,7 @@ In the window:
   **Check AcoustID (incl. MP3)**, which rescans the folder for both
   `.flac` and `.mp3` files and runs the check on all of them. This is
   scoped strictly to that one button: it doesn't touch what Start or
-  Check AcoustID Only see, doesn't convert anything, and, like the
-  FLAC-only check, never auto-corrects.
+  Check AcoustID Only see, and doesn't convert anything.
 - The API key is saved between runs (Qt `QSettings`); get one for free at
   [acoustid.org](https://acoustid.org/).
 
