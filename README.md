@@ -29,9 +29,10 @@ In the window:
    **Collection Summary** (next to Browse) is unrelated to conversion -
    see below.
 2. Choose a **quality** preset and the number of **parallel jobs**.
-3. Optionally tick **Check AcoustID** and enter an AcoustID API key to
-   fingerprint each file and compare it against MusicBrainz before
-   converting (see below).
+3. Optionally tick **Check AcoustID** to fingerprint each file and compare
+   it against MusicBrainz before converting (see below). The AcoustID API
+   key is entered via **Settings...** (masked like a password; hold the
+   👁 button next to it to reveal), alongside the Lidarr settings.
 4. **Start** — each file gets its own row with a live progress bar
    (percent, encode speed) fed from ffmpeg's `-progress` stream. **Cancel**
    stops queued files immediately and lets in-flight ones finish or abort.
@@ -90,12 +91,13 @@ In the window:
   first), which is exactly the state we wanted anyway. 4xx responses are
   otherwise never retried, since they're logical/permanent, not
   transient - retrying would just get the same answer.
-- Entirely separate feature, off by default. Click **Lidarr Settings...**
-  to enter your Lidarr **URL** (e.g. `http://localhost:8686`) and **API
-  key** (Lidarr's Settings > General) and use **Test Connection** to
-  confirm they're correct (host/port reachable, key accepted) before
-  relying on them. Then click **Import to Lidarr** to hand the current
-  folder to Lidarr, instead of using Lidarr's own import UI.
+- Entirely separate feature, off by default. Click **Settings...** to
+  enter your Lidarr **URL** (e.g. `http://localhost:8686`) and **API key**
+  (Lidarr's Settings > General) and use **Test Connection** to confirm
+  they're correct (host/port reachable, key accepted) before relying on
+  them. Then click **Import to Lidarr** to hand the current folder to
+  Lidarr, instead of using Lidarr's own import UI. (**Settings...** also
+  holds the AcoustID API key - see above.)
 - **Import to Lidarr** opens a "Lidarr import" log window that streams
   every step live as it happens - resolving the artist, clearing stale
   trackfile records, scanning for candidates, each submitted batch, and
@@ -113,7 +115,7 @@ In the window:
 - If this app sees the library at a different path than Lidarr does (e.g.
   Lidarr runs in a container or on another host, and the same share is
   mounted under a different path here), also set **Local path to
-  library** and **Same path inside Lidarr** in Lidarr Settings... - e.g.
+  library** and **Same path inside Lidarr** in Settings... - e.g.
   `/home/user/Music` and `/music`. Without this, Lidarr's manual-import
   scan will silently find nothing, since it can only look things up under
   its own filesystem view. Check an artist's `path` in Lidarr (via its
@@ -195,7 +197,7 @@ In the window:
 Register this program as a Lidarr **Custom Script** to have it convert and
 import new downloads automatically, with no GUI involved:
 
-1. Configure the Lidarr URL/API key once via **Lidarr Settings...** in the
+1. Configure the Lidarr URL/API key once via **Settings...** in the
    GUI (see above) - the headless hook reuses the same saved settings.
 2. In Lidarr: **Settings → Connect → +  → Custom Script**.
 3. **Path**: the full path to `acoustid.py` (it's already executable and

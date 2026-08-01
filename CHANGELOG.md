@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- App/window icon (`icons/acoustid.svg`, rasterized to several PNG sizes).
+- **Lidarr Settings...** is now just **Settings...** and also holds the
+  AcoustID API key (previously a separate field in the main window). The
+  key field is masked like a password; a 👁 button next to it reveals the
+  real value only while the mouse is held over it, re-masking the moment
+  it leaves - no click-to-toggle state to forget to turn back off.
+
 ## [0.5]
 
 ### Added

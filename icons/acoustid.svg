@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <!-- Ring: teal majority, gray across the top, small gaps at the two joins -->
+  <path d="M 160.62 65.00 A 70 70 0 1 1 39.38 65.00" fill="none" stroke="#3fa8a0" stroke-width="11" stroke-linecap="round"/>
+  <path d="M 42.70 59.85 A 70 70 0 0 1 157.30 59.85" fill="none" stroke="#9aa0a6" stroke-width="11" stroke-linecap="round"/>
+
+  <!-- Beamed eighth notes -->
+  <polygon points="80,54 126,72 126,82 80,64" fill="#e8602c"/>
+  <rect x="76" y="58" width="9" height="66" fill="#e8602c"/>
+  <ellipse cx="66" cy="130" rx="19" ry="16" fill="#e8602c" transform="rotate(-12 66 130)"/>
+  <rect x="118" y="70" width="9" height="42" fill="#f2d98b"/>
+  <ellipse cx="108" cy="114" rx="16" ry="14" fill="#f2d98b" transform="rotate(-12 108 114)"/>
+</svg>

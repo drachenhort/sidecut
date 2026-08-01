@@ -14,8 +14,8 @@ from pathlib import Path
 from typing import TextIO
 
 from PySide6.QtCharts import QBarCategoryAxis, QBarSet, QChart, QChartView, QHorizontalBarSeries, QValueAxis
-from PySide6.QtCore import QSettings, Qt, QThread, Signal
-from PySide6.QtGui import QPainter
+from PySide6.QtCore import QEvent, QSettings, Qt, QThread, Signal
+from PySide6.QtGui import QEnterEvent, QIcon, QPainter
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -266,26 +266,56 @@ class LidarrImportLogWindow(QDialog):
         self.text.appendPlainText(message)
 
 
+class _HoverRevealButton(QPushButton):
+    """A small button that reveals a masked QLineEdit's real text only
+    while the mouse is held over it - no click-to-toggle state to forget
+    to turn back off, the field re-masks itself the moment the mouse
+    leaves."""
+
+    def __init__(self, line_edit: QLineEdit, parent: QWidget | None = None) -> None:
+        super().__init__("👁", parent)
+        self.setFixedWidth(28)
+        self.setToolTip("Hold to reveal")
+        self._line_edit = line_edit
+
+    def enterEvent(self, event: QEnterEvent) -> None:
+        self._line_edit.setEchoMode(QLineEdit.Normal)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event: QEvent) -> None:
+        self._line_edit.setEchoMode(QLineEdit.Password)
+        super().leaveEvent(event)
+
+
 class LidarrSettingsDialog(QDialog):
-    """Modal dialog for the Lidarr URL/API key, with a Test Connection
-    button so mistakes (wrong host/port, bad key) show up here instead of
-    only surfacing later as a confusing Import to Lidarr failure."""
+    """Modal dialog for all of this app's settings - Lidarr's URL/API key
+    (with a Test Connection button so mistakes like a wrong host/port or
+    bad key show up here instead of only surfacing later as a confusing
+    Import to Lidarr failure) plus the AcoustID API key."""
 
     def __init__(self, settings: QSettings, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Lidarr Settings")
+        self.setWindowTitle("Settings")
         self.settings = settings
         self.test_worker: LidarrConnectionTestWorker | None = None
 
         layout = QVBoxLayout(self)
 
         form = QFormLayout()
+        self.acoustid_key_edit = QLineEdit(self.settings.value("acoustid_api_key", ""))
+        self.acoustid_key_edit.setPlaceholderText("AcoustID API key (get one at acoustid.org)")
+        self.acoustid_key_edit.setEchoMode(QLineEdit.Password)
+        acoustid_key_row = QHBoxLayout()
+        acoustid_key_row.addWidget(self.acoustid_key_edit)
+        acoustid_key_row.addWidget(_HoverRevealButton(self.acoustid_key_edit, self))
+        form.addRow("AcoustID API key:", acoustid_key_row)
+
         self.url_edit = QLineEdit(self.settings.value("lidarr_url", ""))
         self.url_edit.setPlaceholderText("http://localhost:8686")
         self.key_edit = QLineEdit(self.settings.value("lidarr_api_key", ""))
         self.key_edit.setPlaceholderText("API key (Lidarr: Settings > General)")
-        form.addRow("URL:", self.url_edit)
-        form.addRow("API key:", self.key_edit)
+        form.addRow("Lidarr URL:", self.url_edit)
+        form.addRow("Lidarr API key:", self.key_edit)
 
         self.local_root_edit = QLineEdit(self.settings.value("lidarr_local_root", ""))
         self.local_root_edit.setPlaceholderText("e.g. /home/user/Music (leave blank if not needed)")
@@ -338,6 +368,7 @@ class LidarrSettingsDialog(QDialog):
         QMessageBox.critical(self, "Lidarr Settings", message)
 
     def accept(self) -> None:
+        self.settings.setValue("acoustid_api_key", self.acoustid_key_edit.text().strip())
         self.settings.setValue("lidarr_url", self.url_edit.text().strip())
         self.settings.setValue("lidarr_api_key", self.key_edit.text().strip())
         self.settings.setValue("lidarr_local_root", self.local_root_edit.text().strip())
@@ -524,11 +555,6 @@ class MainWindow(QMainWindow):
         self.acoustid_checkbox.setChecked(self.settings.value("acoustid_enabled", False, type=bool))
         self.acoustid_checkbox.toggled.connect(self._save_acoustid_settings)
 
-        self.acoustid_key_edit = QLineEdit()
-        self.acoustid_key_edit.setPlaceholderText("AcoustID API key (get one at acoustid.org)")
-        self.acoustid_key_edit.setText(self.settings.value("acoustid_api_key", ""))
-        self.acoustid_key_edit.editingFinished.connect(self._save_acoustid_settings)
-
         self.acoustid_autocorrect_checkbox = QCheckBox("Auto-correct mismatched MBID")
         self.acoustid_autocorrect_checkbox.setToolTip(
             "When Check AcoustID finds a mismatch with a confident enough score "
@@ -546,7 +572,7 @@ class MainWindow(QMainWindow):
         self.acoustid_autocorrect_checkbox.toggled.connect(self._save_acoustid_settings)
 
         config_row.addWidget(self.acoustid_checkbox)
-        config_row.addWidget(self.acoustid_key_edit, stretch=1)
+        config_row.addStretch(1)
         config_row.addWidget(self.acoustid_autocorrect_checkbox)
         outer.addLayout(config_row)
 
@@ -574,7 +600,6 @@ class MainWindow(QMainWindow):
 
     def _save_acoustid_settings(self) -> None:
         self.settings.setValue("acoustid_enabled", self.acoustid_checkbox.isChecked())
-        self.settings.setValue("acoustid_api_key", self.acoustid_key_edit.text().strip())
         self.settings.setValue("acoustid_autocorrect", self.acoustid_autocorrect_checkbox.isChecked())
 
     def _build_lidarr_row(self) -> QHBoxLayout:
@@ -585,15 +610,15 @@ class MainWindow(QMainWindow):
             "When Start finishes converting at least one file, automatically run the same\n"
             "thing Import to Lidarr does - no extra click needed. Off by default. Only runs\n"
             "after a real conversion (not a Check AcoustID Only/+MP3 run), and only if a URL\n"
-            "and API key are set in Lidarr Settings...; otherwise it's silently skipped."
+            "and API key are set in Settings...; otherwise it's silently skipped."
         )
         self.lidarr_autoimport_checkbox.setChecked(self.settings.value("lidarr_autoimport", False, type=bool))
         self.lidarr_autoimport_checkbox.toggled.connect(
             lambda checked: self.settings.setValue("lidarr_autoimport", checked)
         )
 
-        lidarr_settings_button = QPushButton("Lidarr Settings...")
-        lidarr_settings_button.clicked.connect(self._open_lidarr_settings)
+        settings_button = QPushButton("Settings...")
+        settings_button.clicked.connect(self._open_lidarr_settings)
 
         self.lidarr_import_button = QPushButton("Import to Lidarr")
         self.lidarr_import_button.setToolTip(
@@ -603,14 +628,14 @@ class MainWindow(QMainWindow):
             "instead of a direct database write. Only files Lidarr can fully auto-match\n"
             "(from embedded tags) are imported; anything it can't match is left alone and\n"
             "reported back, not touched.\n"
-            "Configure the URL and API key via Lidarr Settings..."
+            "Configure the URL and API key via Settings..."
         )
         self.lidarr_import_button.setEnabled(False)
         self.lidarr_import_button.clicked.connect(self._start_lidarr_import)
 
         row.addWidget(self.lidarr_autoimport_checkbox)
         row.addStretch(1)
-        row.addWidget(lidarr_settings_button)
+        row.addWidget(settings_button)
         row.addWidget(self.lidarr_import_button)
         return row
 
@@ -663,9 +688,9 @@ class MainWindow(QMainWindow):
         if not core.check_fpcalc():
             QMessageBox.critical(self, "AcoustID", "The AcoustID check needs fpcalc (chromaprint) on PATH.")
             return None
-        apikey = self.acoustid_key_edit.text().strip()
+        apikey = self.settings.value("acoustid_api_key", "").strip()
         if not apikey:
-            QMessageBox.critical(self, "AcoustID", "The AcoustID check needs an API key.")
+            QMessageBox.critical(self, "AcoustID", "The AcoustID check needs an API key, set via Settings...")
             return None
         return apikey
 
@@ -702,7 +727,7 @@ class MainWindow(QMainWindow):
         api_key = self.settings.value("lidarr_api_key", "")
         if not base_url or not api_key:
             QMessageBox.critical(
-                self, "AcoustID", "Set the Lidarr URL and API key first, via Lidarr Settings..."
+                self, "AcoustID", "Set the Lidarr URL and API key first, via Settings..."
             )
             return
 
@@ -892,6 +917,9 @@ def main() -> None:
         sys.exit(lidarr_hook.run_from_environment())
 
     app = QApplication(sys.argv)
+    icon_path = Path(__file__).parent / "icons" / "acoustid_256.png"
+    if icon_path.is_file():
+        app.setWindowIcon(QIcon(str(icon_path)))
     if not core.check_ffmpeg():
         QMessageBox.critical(None, "AcoustID", "ffmpeg is required but was not found on PATH.")
         sys.exit(1)
