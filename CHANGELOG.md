@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.6]
+
 ### Added
 - App/window icon (`icons/acoustid.svg`, rasterized to several PNG sizes).
 - **Lidarr Settings...** is now just **Settings...** and also holds the
@@ -11,6 +13,11 @@ All notable changes to this project are documented in this file.
   key field is masked like a password; a 👁 button next to it reveals the
   real value only while the mouse is held over it, re-masking the moment
   it leaves - no click-to-toggle state to forget to turn back off.
+
+### Changed
+- The **Start** button is now **Transcode**, to read clearly alongside
+  Check AcoustID Only/+MP3 now that the AcoustID check is documented as a
+  standalone use of this tool, not just a pre-conversion step.
 
 ## [0.5]
 
