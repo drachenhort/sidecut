@@ -83,12 +83,13 @@ In the window:
   in-memory state. Instead it drives Lidarr's **Manual Import API**: the
   same matching logic behind Lidarr's Manual Import screen, just called
   as an HTTP command instead of clicked through by hand.
-- Before scanning, it also (best-effort) asks Lidarr to rescan its
-  library, so Lidarr's database catches up with files this tool changed
-  on disk (e.g. a FLAC it just converted and deleted) instead of
-  rejecting matches against stale records for a file that no longer
-  exists. If your Lidarr version doesn't support that rescan command,
-  this step is silently skipped rather than blocking the import.
+- If Lidarr rejects a match because its database still has a TrackFile
+  record for a file this tool already replaced (e.g. converted a FLAC to
+  MP3 and deleted the original), that stale record is deleted via
+  Lidarr's API and the scan is retried once before giving up - the same
+  fix used by the proven
+  [TheCaptain989/lidarr-flac2mp3](https://github.com/TheCaptain989/lidarr-flac2mp3)
+  script, rather than a blanket library rescan.
 - Lidarr reads the files' own embedded tags to propose matches. Since
   this tool preserves full MusicBrainz/AcoustID tags through conversion,
   well-tagged files are usually auto-matched with no input needed.
@@ -101,6 +102,34 @@ In the window:
   window - it doesn't require or interact with Start, Check AcoustID, or
   the file table, and can be used on its own at any time a folder is
   selected (e.g. right after a conversion finishes).
+
+## Automatic conversion on new downloads (optional)
+
+Register this program as a Lidarr **Custom Script** to have it convert and
+import new downloads automatically, with no GUI involved:
+
+1. Configure the Lidarr URL/API key once via **Lidarr Settings...** in the
+   GUI (see above) - the headless hook reuses the same saved settings.
+2. In Lidarr: **Settings → Connect → +  → Custom Script**.
+3. **Path**: the full path to `acoustid.py` (it's already executable and
+   has a `#!/usr/bin/env python3` shebang).
+4. Tick **On Import** (and **On Upgrade** if you also want re-conversions
+   on upgrades), then **Save** and use Lidarr's **Test** button to verify.
+
+From then on, whenever Lidarr imports a new FLAC download, it invokes
+`acoustid.py` directly with details as `lidarr_*` environment variables
+(the same mechanism `lidarr-flac2mp3` uses) instead of opening a window:
+it converts the newly added FLAC(s) using your saved quality preset, then
+- if a Lidarr URL/API key are configured - hands the result to Lidarr's
+Manual Import API, same as the **Import to Lidarr** button. Any other
+Lidarr event (Grab, Rename, etc.) is ignored. To try it by hand without
+waiting for a real download:
+
+```bash
+lidarr_eventtype=Test /full/path/to/acoustid.py
+```
+
+See `lidarr_hook.py` for the implementation.
 
 ## Behavior
 
@@ -128,7 +157,12 @@ In the window:
   invocation, tag/picture copying); no Qt dependency, directly unit tested.
 - `lidarr.py` — the optional Lidarr Manual Import API client; no Qt
   dependency, directly unit tested.
-- `acoustid.py` — the PySide6 window and its background conversion thread.
+- `lidarr_hook.py` — headless entry point for running as a Lidarr Custom
+  Script (reads `lidarr_*` env vars, converts, calls `lidarr.py`); no Qt
+  widgets, directly unit tested.
+- `acoustid.py` — the PySide6 window and its background conversion
+  thread; `main()` dispatches to `lidarr_hook` before touching Qt if
+  invoked as a Lidarr Custom Script.
 
 ## Tests
 

@@ -16,17 +16,29 @@ All notable changes to this project are documented in this file.
   independent of everything else in the window): hands the current folder
   to Lidarr's own Manual Import API instead of writing to Lidarr's
   database directly or requiring its import UI. New `lidarr.py` module
-  wraps the API (best-effort rescan so Lidarr's database catches up with
-  files this tool changed on disk, scan a folder for matches, submit the
-  fully-matched ones, poll until the import command finishes); files
-  Lidarr can't auto-match from embedded tags are left untouched and
-  reported back together with Lidarr's own rejection reason (e.g.
-  "already has file"), so a surprising "0 imported" is diagnosable
-  instead of a dead end.
+  wraps the API: scan a folder for matches, submit the fully-matched
+  ones, poll until the import command finishes. Files Lidarr can't
+  auto-match from embedded tags are left untouched and reported back
+  together with Lidarr's own rejection reason (e.g. "already has file"),
+  so a surprising "0 imported" is diagnosable instead of a dead end. When
+  a match is specifically rejected because Lidarr's database still has a
+  TrackFile record for a file this tool already replaced (e.g. converted
+  a FLAC to MP3 and deleted the original), that stale record is deleted
+  via the API and the scan retried once - the same fix the proven
+  TheCaptain989/lidarr-flac2mp3 script uses - rather than a blanket
+  library rescan.
 - New **Lidarr Settings...** dialog holding the Lidarr URL/API key (moved
   out of the main window), with a **Test Connection** button that
   verifies the host/port is reachable and the API key is accepted before
   you rely on them for an import.
+- New headless mode (`lidarr_hook.py`): register `acoustid.py` itself as
+  a Lidarr **Custom Script** (Settings > Connect) to have it convert new
+  downloads to MP3 and hand them to Lidarr's Manual Import API
+  automatically, with no GUI involved - the same wiring
+  TheCaptain989/lidarr-flac2mp3 uses (`lidarr_*` environment variables),
+  reusing the Lidarr URL/API key and quality preset already saved via the
+  GUI. `main()` detects this invocation (via `lidarr_eventtype` in the
+  environment) and dispatches to it before creating any Qt objects.
 - The last folder opened (via **Browse...** or on the command line) is
   now remembered between runs and reopened automatically on launch.
 - New **Check AcoustID (incl. MP3)** button: rescans the folder for both

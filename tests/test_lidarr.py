@@ -63,7 +63,8 @@ def test_submit_manual_import_posts_command_and_returns_id() -> None:
     payload = post.call_args.kwargs["json"]
     assert payload["name"] == "ManualImport"
     assert payload["files"] == [{"path": "a"}]
-    assert payload["importMode"] == "move"
+    assert payload["importMode"] == "auto"
+    assert payload["replaceExistingFiles"] is False
 
 
 def test_wait_for_command_returns_once_completed() -> None:
@@ -101,15 +102,39 @@ def test_skip_reason_falls_back_to_which_field_is_missing() -> None:
     assert lidarr.skip_reason({"artist": {"id": 1}, "album": {"id": 2}, "tracks": []}) == "no track match"
 
 
-def test_trigger_rescan_posts_rescan_command() -> None:
+def test_has_existing_file_rejection() -> None:
+    blocked = {"album": {"id": 5}, "rejections": [{"reason": "Track already has file"}]}
+    assert lidarr.has_existing_file_rejection(blocked) is True
+
+    assert lidarr.has_existing_file_rejection({"album": None, "rejections": [{"reason": "Track already has file"}]}) is False
+    assert lidarr.has_existing_file_rejection({"album": {"id": 5}, "rejections": [{"reason": "no audio files"}]}) is False
+    assert lidarr.has_existing_file_rejection({"album": {"id": 5}, "rejections": []}) is False
+
+
+def test_get_album_trackfiles_passes_album_id() -> None:
     response = Mock()
-    response.json.return_value = {"id": 7}
+    response.json.return_value = [{"id": 1}, {"id": 2}]
 
-    with patch("requests.post", return_value=response) as post:
-        command_id = lidarr.trigger_rescan("http://localhost:8686", "key")
+    with patch("requests.get", return_value=response) as get:
+        trackfiles = lidarr.get_album_trackfiles("http://localhost:8686", "key", 5)
 
-    assert command_id == 7
-    assert post.call_args.kwargs["json"] == {"name": "RescanFolders"}
+    assert trackfiles == [{"id": 1}, {"id": 2}]
+    assert get.call_args.kwargs["params"] == {"albumId": 5}
+
+
+def test_clear_stale_trackfiles_deletes_each_one() -> None:
+    list_response = Mock()
+    list_response.json.return_value = [{"id": 1}, {"id": 2}]
+
+    with (
+        patch("requests.get", return_value=list_response),
+        patch("requests.delete", return_value=Mock()) as delete,
+    ):
+        count = lidarr.clear_stale_trackfiles("http://localhost:8686", "key", 5)
+
+    assert count == 2
+    deleted_ids = sorted(call.args[0].rsplit("/", 1)[-1] for call in delete.call_args_list)
+    assert deleted_ids == ["1", "2"]
 
 
 def test_import_folder_only_submits_matched_candidates() -> None:
@@ -120,83 +145,8 @@ def test_import_folder_only_submits_matched_candidates() -> None:
             "artist": None,
             "album": None,
             "tracks": [],
-            "rejections": [{"reason": "Track already has file"}],
+            "rejections": [{"reason": "no match"}],
         },
-    ]
-    rescan_wait_response = Mock()
-    rescan_wait_response.json.return_value = {"status": "completed"}
-    candidates_response = Mock()
-    candidates_response.json.return_value = candidates
-    import_wait_response = Mock()
-    import_wait_response.json.return_value = {"status": "completed"}
-    rescan_post_response = Mock()
-    rescan_post_response.json.return_value = {"id": 1}
-    import_post_response = Mock()
-    import_post_response.json.return_value = {"id": 2}
-
-    with (
-        patch("requests.get", side_effect=[rescan_wait_response, candidates_response, import_wait_response]),
-        patch("requests.post", side_effect=[rescan_post_response, import_post_response]) as post,
-    ):
-        imported, skipped, skipped_names = lidarr.import_folder("http://localhost:8686", "key", Path("/music"))
-
-    assert imported == 1
-    assert skipped == 1
-    assert skipped_names == ["b.mp3: Track already has file"]
-    import_payload = post.call_args_list[1].kwargs["json"]
-    assert len(import_payload["files"]) == 1
-
-
-def test_import_folder_skips_submit_when_nothing_matched() -> None:
-    rescan_wait_response = Mock()
-    rescan_wait_response.json.return_value = {"status": "completed"}
-    candidates_response = Mock()
-    candidates_response.json.return_value = [
-        {"path": "/music/b.mp3", "artist": None, "album": None, "tracks": [], "rejections": ["no match"]},
-    ]
-    rescan_post_response = Mock()
-    rescan_post_response.json.return_value = {"id": 1}
-
-    with (
-        patch("requests.get", side_effect=[rescan_wait_response, candidates_response]),
-        patch("requests.post", return_value=rescan_post_response) as post,
-    ):
-        imported, skipped, skipped_names = lidarr.import_folder("http://localhost:8686", "key", Path("/music"))
-
-    assert imported == 0
-    assert skipped == 1
-    assert skipped_names == ["b.mp3: no match"]
-    post.assert_called_once()  # only the rescan trigger, no ManualImport submitted
-
-
-def test_import_folder_raises_on_lidarr_reported_failure() -> None:
-    candidates = [
-        {"path": "/music/a.mp3", "artist": {"id": 1}, "album": {"id": 2}, "tracks": [{"id": 3}], "rejections": []},
-    ]
-    rescan_wait_response = Mock()
-    rescan_wait_response.json.return_value = {"status": "completed"}
-    candidates_response = Mock()
-    candidates_response.json.return_value = candidates
-    import_wait_response = Mock()
-    import_wait_response.json.return_value = {"status": "failed", "message": "disk full"}
-    rescan_post_response = Mock()
-    rescan_post_response.json.return_value = {"id": 1}
-    import_post_response = Mock()
-    import_post_response.json.return_value = {"id": 2}
-
-    with (
-        patch("requests.get", side_effect=[rescan_wait_response, candidates_response, import_wait_response]),
-        patch("requests.post", side_effect=[rescan_post_response, import_post_response]),
-    ):
-        with pytest.raises(lidarr.LidarrError, match="disk full"):
-            lidarr.import_folder("http://localhost:8686", "key", Path("/music"))
-
-
-def test_import_folder_proceeds_when_rescan_trigger_fails() -> None:
-    # The pre-import rescan is best-effort: if Lidarr rejects/doesn't
-    # support it, the import itself must still go ahead rather than failing.
-    candidates = [
-        {"path": "/music/a.mp3", "artist": {"id": 1}, "album": {"id": 2}, "tracks": [{"id": 3}], "rejections": []},
     ]
     candidates_response = Mock()
     candidates_response.json.return_value = candidates
@@ -207,12 +157,89 @@ def test_import_folder_proceeds_when_rescan_trigger_fails() -> None:
 
     with (
         patch("requests.get", side_effect=[candidates_response, import_wait_response]),
+        patch("requests.post", return_value=import_post_response) as post,
+    ):
+        imported, skipped, skipped_names = lidarr.import_folder("http://localhost:8686", "key", Path("/music"))
+
+    assert imported == 1
+    assert skipped == 1
+    assert skipped_names == ["b.mp3: no match"]
+    import_payload = post.call_args.kwargs["json"]
+    assert len(import_payload["files"]) == 1
+
+
+def test_import_folder_skips_submit_when_nothing_matched() -> None:
+    candidates_response = Mock()
+    candidates_response.json.return_value = [
+        {"path": "/music/b.mp3", "artist": None, "album": None, "tracks": [], "rejections": ["no match"]},
+    ]
+
+    with patch("requests.get", return_value=candidates_response), patch("requests.post") as post:
+        imported, skipped, skipped_names = lidarr.import_folder("http://localhost:8686", "key", Path("/music"))
+
+    assert imported == 0
+    assert skipped == 1
+    assert skipped_names == ["b.mp3: no match"]
+    post.assert_not_called()
+
+
+def test_import_folder_clears_stale_trackfile_and_retries() -> None:
+    # First scan: Lidarr rejects the MP3 because it still has a TrackFile
+    # record for the FLAC this tool converted and deleted.
+    first_scan = [
+        {
+            "path": "/music/a.mp3",
+            "artist": {"id": 1},
+            "album": {"id": 5},
+            "tracks": [],
+            "rejections": [{"reason": "Track already has file"}],
+        },
+    ]
+    # After clearing the stale record, the retry scan matches cleanly.
+    second_scan = [
+        {"path": "/music/a.mp3", "artist": {"id": 1}, "album": {"id": 5}, "tracks": [{"id": 3}], "rejections": []},
+    ]
+    first_scan_response = Mock()
+    first_scan_response.json.return_value = first_scan
+    trackfiles_response = Mock()
+    trackfiles_response.json.return_value = [{"id": 99}]
+    second_scan_response = Mock()
+    second_scan_response.json.return_value = second_scan
+    import_wait_response = Mock()
+    import_wait_response.json.return_value = {"status": "completed"}
+    import_post_response = Mock()
+    import_post_response.json.return_value = {"id": 2}
+
+    with (
         patch(
-            "requests.post",
-            side_effect=[requests.ConnectionError("unknown command"), import_post_response],
+            "requests.get",
+            side_effect=[first_scan_response, trackfiles_response, second_scan_response, import_wait_response],
         ),
+        patch("requests.delete", return_value=Mock()) as delete,
+        patch("requests.post", return_value=import_post_response),
     ):
         imported, skipped, skipped_names = lidarr.import_folder("http://localhost:8686", "key", Path("/music"))
 
     assert imported == 1
     assert skipped == 0
+    assert skipped_names == []
+    delete.assert_called_once()
+
+
+def test_import_folder_raises_on_lidarr_reported_failure() -> None:
+    candidates = [
+        {"path": "/music/a.mp3", "artist": {"id": 1}, "album": {"id": 2}, "tracks": [{"id": 3}], "rejections": []},
+    ]
+    candidates_response = Mock()
+    candidates_response.json.return_value = candidates
+    import_wait_response = Mock()
+    import_wait_response.json.return_value = {"status": "failed", "message": "disk full"}
+    import_post_response = Mock()
+    import_post_response.json.return_value = {"id": 2}
+
+    with (
+        patch("requests.get", side_effect=[candidates_response, import_wait_response]),
+        patch("requests.post", return_value=import_post_response),
+    ):
+        with pytest.raises(lidarr.LidarrError, match="disk full"):
+            lidarr.import_folder("http://localhost:8686", "key", Path("/music"))

@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
 
 import core
 import lidarr
+import lidarr_hook
 
 __version__ = "0.4"
 
@@ -648,6 +649,12 @@ class MainWindow(QMainWindow):
 
 
 def main() -> None:
+    if lidarr_hook.is_invocation():
+        # Lidarr Custom Script invocation: no display available in general
+        # (this may run inside Lidarr's own container), so never touch
+        # QApplication/Qt widgets on this path - just the plain script logic.
+        sys.exit(lidarr_hook.run_from_environment())
+
     app = QApplication(sys.argv)
     if not core.check_ffmpeg():
         QMessageBox.critical(None, "AcoustID", "ffmpeg is required but was not found on PATH.")

@@ -6,16 +6,21 @@ through Lidarr's import UI - and without us writing to Lidarr's database
 directly, which is unsupported and liable to break across Lidarr versions
 or race with Lidarr's own in-memory state.
 
-Follows the same manual-import contract Sonarr/Radarr/Lidarr all share:
-GET /api/v1/manualimport lets Lidarr propose matches (it reads embedded
-tags itself, so files carrying MusicBrainz tags - which is everything this
-tool converts - are usually matched automatically); POST /api/v1/command
-with those matches queues the actual import.
+Follows the same manual-import contract Sonarr/Radarr/Lidarr all share, and
+the same approach as the proven TheCaptain989/lidarr-flac2mp3 script (the
+one behind linuxserver/docker-mods' lidarr-flac2mp3 mod): GET
+/api/v1/manualimport lets Lidarr propose matches (it reads embedded tags
+itself, so files carrying MusicBrainz tags - which is everything this tool
+converts - are usually matched automatically); when a match is rejected
+because Lidarr's database still points at the original file this tool
+replaced (e.g. a FLAC it converted to MP3 and deleted), the existing
+TrackFile record is deleted via DELETE /api/v1/trackfile/{id} so the
+replacement isn't blocked by a stale "already has file" rejection; then
+POST /api/v1/command queues the actual import.
 """
 
 from __future__ import annotations
 
-import contextlib
 import time
 from pathlib import Path
 from typing import Any
@@ -25,7 +30,6 @@ import requests
 REQUEST_TIMEOUT = 30.0
 COMMAND_POLL_INTERVAL = 1.0
 COMMAND_POLL_TIMEOUT = 300.0
-RESCAN_POLL_TIMEOUT = 600.0
 
 
 class LidarrError(Exception):
@@ -66,7 +70,7 @@ def get_manual_import_candidates(base_url: str, api_key: str, folder: Path) -> l
         response = requests.get(
             _url(base_url, "/api/v1/manualimport"),
             headers=_headers(api_key),
-            params={"folder": str(folder), "filterExistingFiles": "true"},
+            params={"folder": str(folder), "filterExistingFiles": "true", "replaceExistingFiles": "false"},
             timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()
@@ -84,13 +88,28 @@ def is_fully_matched(item: dict[str, Any]) -> bool:
     )
 
 
+def _rejection_reasons(item: dict[str, Any]) -> list[str]:
+    return [r.get("reason", str(r)) if isinstance(r, dict) else str(r) for r in item.get("rejections") or []]
+
+
+def has_existing_file_rejection(item: dict[str, Any]) -> bool:
+    """Whether this candidate was rejected specifically because Lidarr's
+    database already has a TrackFile for that track - the standard
+    "Track already has file"/"existing" rejection you get when this tool
+    deleted the original (e.g. a FLAC just converted to MP3) but Lidarr's
+    database hasn't been told, so it's still pointing at a file that's
+    gone. This is the case clear_stale_trackfiles can fix."""
+    return bool(item.get("album")) and any(
+        "already has" in reason.lower() or "existing" in reason.lower() for reason in _rejection_reasons(item)
+    )
+
+
 def skip_reason(item: dict[str, Any]) -> str:
     """Human-readable reason a candidate wasn't submitted - surfaces
     Lidarr's own rejection text (e.g. "Track already has file") instead of
     just silently listing the filename, since that's usually exactly what
-    explains a surprising "0 imported" result: Lidarr's database hasn't
-    caught up with a file this tool deleted/replaced outside of Lidarr."""
-    reasons = [r.get("reason", str(r)) if isinstance(r, dict) else str(r) for r in item.get("rejections") or []]
+    explains a surprising "0 imported" result."""
+    reasons = _rejection_reasons(item)
     if reasons:
         return "; ".join(reasons)
     if not item.get("artist"):
@@ -114,20 +133,51 @@ def _queue_command(base_url: str, api_key: str, payload: dict[str, Any]) -> int:
 
 
 def submit_manual_import(
-    base_url: str, api_key: str, items: list[dict[str, Any]], import_mode: str = "move"
+    base_url: str, api_key: str, items: list[dict[str, Any]], import_mode: str = "auto"
 ) -> int:
     """Queue a ManualImport command for the given (already-matched)
     candidates. Returns the queued command's id for wait_for_command."""
     return _queue_command(
-        base_url, api_key, {"name": "ManualImport", "files": items, "importMode": import_mode}
+        base_url,
+        api_key,
+        {"name": "ManualImport", "files": items, "importMode": import_mode, "replaceExistingFiles": False},
     )
 
 
-def trigger_rescan(base_url: str, api_key: str) -> int:
-    """Queue a library rescan so Lidarr's database catches up with files
-    this tool changed on disk outside of Lidarr (e.g. a FLAC it deleted
-    after converting it to MP3). Returns the queued command's id."""
-    return _queue_command(base_url, api_key, {"name": "RescanFolders"})
+def get_album_trackfiles(base_url: str, api_key: str, album_id: int) -> list[dict[str, Any]]:
+    """List Lidarr's existing TrackFile records for an album."""
+    try:
+        response = requests.get(
+            _url(base_url, "/api/v1/trackfile"),
+            headers=_headers(api_key),
+            params={"albumId": album_id},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise LidarrError(f"Failed to look up existing track files for album {album_id}: {exc}") from exc
+    return response.json()
+
+
+def delete_trackfile(base_url: str, api_key: str, trackfile_id: int) -> None:
+    try:
+        response = requests.delete(
+            _url(base_url, f"/api/v1/trackfile/{trackfile_id}"), headers=_headers(api_key), timeout=REQUEST_TIMEOUT
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise LidarrError(f"Failed to delete stale track file {trackfile_id}: {exc}") from exc
+
+
+def clear_stale_trackfiles(base_url: str, api_key: str, album_id: int) -> int:
+    """Delete every existing TrackFile record for `album_id`, so a
+    replacement (e.g. this tool's MP3 after deleting the FLAC it was
+    converted from) isn't rejected as "already has file" against a record
+    Lidarr hasn't otherwise reconciled. Returns how many were deleted."""
+    trackfiles = get_album_trackfiles(base_url, api_key, album_id)
+    for trackfile in trackfiles:
+        delete_trackfile(base_url, api_key, trackfile["id"])
+    return len(trackfiles)
 
 
 def wait_for_command(
@@ -151,20 +201,26 @@ def wait_for_command(
         time.sleep(COMMAND_POLL_INTERVAL)
 
 
-def import_folder(base_url: str, api_key: str, folder: Path, import_mode: str = "move") -> tuple[int, int, list[str]]:
-    """Rescan the library (best-effort, so Lidarr's database reflects files
-    this tool just converted/deleted rather than rejecting matches against
-    stale trackfile records), then scan `folder` via Lidarr's manual-import
-    endpoint and submit only the candidates Lidarr fully auto-matched.
+def import_folder(base_url: str, api_key: str, folder: Path, import_mode: str = "auto") -> tuple[int, int, list[str]]:
+    """Scan `folder` via Lidarr's manual-import endpoint and submit the
+    candidates Lidarr fully auto-matched. For candidates Lidarr rejected
+    specifically because it already has a file for that track (the
+    standard symptom of this tool having deleted/replaced a file Lidarr's
+    database doesn't know is gone), the stale TrackFile record is deleted
+    and the scan retried once before giving up on those.
+
     Returns (imported_count, skipped_count, skipped_file_descriptions),
     where each skipped description includes Lidarr's own rejection reason.
     Never raises for individual unmatched files - only for connectivity/API
     failures or a Lidarr-reported import failure."""
-    with contextlib.suppress(LidarrError):
-        rescan_id = trigger_rescan(base_url, api_key)
-        wait_for_command(base_url, api_key, rescan_id, timeout=RESCAN_POLL_TIMEOUT)
-
     candidates = get_manual_import_candidates(base_url, api_key, folder)
+
+    stale_album_ids = {c["album"]["id"] for c in candidates if has_existing_file_rejection(c)}
+    if stale_album_ids:
+        for album_id in stale_album_ids:
+            clear_stale_trackfiles(base_url, api_key, album_id)
+        candidates = get_manual_import_candidates(base_url, api_key, folder)
+
     matched = [c for c in candidates if is_fully_matched(c)]
     skipped = [c for c in candidates if not is_fully_matched(c)]
 
