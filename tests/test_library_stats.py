@@ -69,6 +69,48 @@ def test_scan_release_types_skips_directories_without_audio_files(tmp_path: Path
     assert counts == {}
 
 
+@pytest.mark.parametrize("disc_names", [["CD 01", "CD 02"], ["Disc 1", "Disc 2", "Disc 3"], ["CD1"]])
+def test_multi_disc_release_counts_as_one_release(tmp_path: Path, disc_names: list[str]) -> None:
+    album = tmp_path / "Artist" / "Box Set (2016)"
+    for disc in disc_names:
+        (album / disc).mkdir(parents=True)
+        make_flac(album / disc / "01.flac", releasetype="album", date="2016-01-01", originaldate="1982-01-01")
+
+    counts = library_stats.scan_release_provenance(tmp_path)
+
+    assert counts == {"Reissue": 1}
+
+
+def test_multi_disc_release_moves_whole_album_folder_not_each_disc(tmp_path: Path) -> None:
+    album = tmp_path / "Artist" / "Box Set (2016)"
+    for disc in ("CD 01", "CD 02"):
+        (album / disc).mkdir(parents=True)
+        make_flac(album / disc / "01.flac", releasetype="album", date="2016-01-01", originaldate="1982-01-01")
+
+    moves = library_stats.plan_reissue_moves(tmp_path)
+
+    assert len(moves) == 1
+    assert moves[0].source == album
+    assert moves[0].destination == tmp_path / "Artist" / "Reissues" / "Box Set (2016)"
+
+
+def test_ordinary_artist_folder_with_multiple_albums_is_not_collapsed(tmp_path: Path) -> None:
+    # Subfolders that aren't disc-named (e.g. real album titles) must NOT
+    # be rolled up into a single "release" - only "CD N"/"Disc N" folders
+    # should trigger the multi-disc collapse.
+    album1 = tmp_path / "Artist" / "Album One (2020)"
+    album1.mkdir(parents=True)
+    make_flac(album1 / "01.flac", releasetype="album")
+
+    album2 = tmp_path / "Artist" / "Some EP (2021)"
+    album2.mkdir(parents=True)
+    make_flac(album2 / "01.flac", releasetype="ep")
+
+    counts = library_stats.scan_release_types(tmp_path)
+
+    assert counts == {"Album": 1, "Ep": 1}
+
+
 def test_scan_release_types_ignores_unreadable_file_without_crashing(tmp_path: Path) -> None:
     album = tmp_path / "Artist" / "Broken (2019)"
     album.mkdir(parents=True)

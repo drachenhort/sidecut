@@ -18,6 +18,7 @@ release.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from collections import Counter
 from dataclasses import dataclass
@@ -88,16 +89,41 @@ def classify_provenance(release_types: list[str], date: str | None, originaldate
     return UNKNOWN_LABEL
 
 
+_DISC_SUBFOLDER_RE = re.compile(r"^(cd|disc|disk)\s*0*\d+$", re.IGNORECASE)
+
+
 def _iter_releases(root: Path) -> list[tuple[Path, str]]:
-    """Every directory under `root` that directly contains at least one
-    audio file, paired with a single representative file from it - one
-    release per directory (album/single/EP/...), since release-level tags
-    are shared by all of a release's tracks."""
+    """Every release under `root`, paired with a single representative
+    audio file from it (a relative path, possibly inside a disc
+    subfolder) - one release per directory (album/single/EP/...) that
+    directly contains at least one audio file, since release-level tags
+    are shared by all of a release's tracks.
+
+    Exception: a multi-disc release ripped as "Album/CD 01", "Album/CD
+    02", ... has no audio directly in "Album" itself - only in each disc
+    subfolder - so without this, each disc would be treated as its own
+    release and things like Reissue-sorting would scatter a single box
+    set across several nested moves instead of relocating "Album" as a
+    whole. When every immediate subdirectory of an otherwise-audio-less
+    directory matches a disc-folder pattern ("CD 1", "Disc 02", ...),
+    that whole group counts as one release keyed by "Album" itself,
+    represented by the first disc's first audio file."""
     releases = []
-    for dirpath, _dirnames, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root):
+        path = Path(dirpath)
         audio_files = sorted(f for f in filenames if Path(f).suffix.lower() in _AUDIO_EXTENSIONS)
         if audio_files:
-            releases.append((Path(dirpath), audio_files[0]))
+            releases.append((path, audio_files[0]))
+            continue
+        if dirnames and all(_DISC_SUBFOLDER_RE.match(name) for name in dirnames):
+            for name in sorted(dirnames):
+                disc_audio = sorted(
+                    f for f in os.listdir(path / name) if Path(f).suffix.lower() in _AUDIO_EXTENSIONS
+                )
+                if disc_audio:
+                    releases.append((path, str(Path(name) / disc_audio[0])))
+                    dirnames[:] = []  # already counted as one release; don't also walk into the discs
+                    break
     return releases
 
 

@@ -27,6 +27,14 @@ All notable changes to this project are documented in this file.
   reviewed and confirmed (`library_stats.plan_declutter_moves`/
   `execute_declutter_moves`).
 
+### Fixed
+- Multi-disc releases ripped as "Album/CD 01", "Album/CD 02", ... were
+  being treated as one release per disc, so Sort Reissues/Compilations
+  would scatter a single box set across several nested "Reissues"/
+  "Compilations" moves instead of relocating the whole album folder.
+  `library_stats._iter_releases` now collapses a directory whose
+  immediate subfolders are all disc-named into one release.
+
 ## [0.6]
 
 ### Added
