@@ -826,6 +826,7 @@ class MainWindow(QMainWindow):
         self.library_stats_window: LibraryStatsWindow | None = None
         self.declutter_scan_worker: DeclutterScanWorker | None = None
         self.declutter_sort_dialog: DeclutterSortDialog | None = None
+        self.queue_window: LidarrQueueWindow | None = None
         self.settings = QSettings("AcoustID", "AcoustID")
         self._acoustid_only_run = False
 
@@ -833,6 +834,15 @@ class MainWindow(QMainWindow):
         folder = initial_folder or self._last_folder()
         if folder is not None:
             self._set_folder(folder)
+
+        self._open_queue_window_if_configured()
+
+    def _open_queue_window_if_configured(self) -> None:
+        lidarr_url = self.settings.value("lidarr_url", "")
+        lidarr_api_key = self.settings.value("lidarr_api_key", "")
+        if lidarr_url and lidarr_api_key:
+            self.queue_window = LidarrQueueWindow(lidarr_url, lidarr_api_key, self)
+            self.queue_window.show()
 
     def _build_ui(self) -> None:
         central = QWidget()
