@@ -11,10 +11,10 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO
 
 from PySide6.QtCharts import QBarCategoryAxis, QBarSet, QChart, QChartView, QHorizontalBarSeries, QValueAxis
-from PySide6.QtCore import QEvent, QSettings, Qt, QThread, Signal
+from PySide6.QtCore import QEvent, QSettings, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QEnterEvent, QIcon, QPainter
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -270,6 +270,26 @@ class LidarrConnectionTestWorker(QThread):
             self.test_error.emit(str(exc))
             return
         self.test_finished.emit(version)
+
+
+class LidarrQueueWorker(QThread):
+    """Fetches Lidarr's current download queue off the UI thread."""
+
+    queue_finished = Signal(list)
+    queue_error = Signal(str)
+
+    def __init__(self, base_url: str, api_key: str) -> None:
+        super().__init__()
+        self.base_url = base_url
+        self.api_key = api_key
+
+    def run(self) -> None:
+        try:
+            records = lidarr.get_queue(self.base_url, self.api_key)
+        except lidarr.LidarrError as exc:
+            self.queue_error.emit(str(exc))
+            return
+        self.queue_finished.emit(records)
 
 
 class LidarrImportLogWindow(QDialog):
@@ -551,6 +571,101 @@ class LibraryStatsWindow(QDialog):
         layout.addWidget(
             _build_bar_chart(provenance_counts, "Original vs. reissue vs. compilation, most common first")
         )
+
+
+QUEUE_POLL_INTERVAL_MS = 5000
+
+
+def _queue_record_title(record: dict[str, Any]) -> str:
+    album = record.get("album") or {}
+    artist = record.get("artist") or {}
+    album_title = album.get("title")
+    artist_name = artist.get("artistName")
+    if album_title and artist_name:
+        return f"{artist_name} - {album_title}"
+    if album_title:
+        return album_title
+    return record.get("title", "")
+
+
+def _queue_record_status(record: dict[str, Any]) -> str:
+    status = str(record.get("status", "")).title()
+    error_message = record.get("errorMessage")
+    tracked_status = record.get("trackedDownloadStatus")
+    if error_message:
+        return f"{status}: {error_message}"
+    if tracked_status in ("warning", "error"):
+        return f"{status} ({tracked_status})"
+    return status
+
+
+def _queue_record_progress(record: dict[str, Any]) -> str:
+    size = record.get("size") or 0
+    sizeleft = record.get("sizeleft")
+    if not size or sizeleft is None:
+        return ""
+    percent = 100 * (1 - sizeleft / size)
+    return f"{percent:.0f}%"
+
+
+class LidarrQueueWindow(QDialog):
+    """Standalone, non-modal window showing Lidarr's live download queue
+    (GET /api/v1/queue), polled every QUEUE_POLL_INTERVAL_MS. Read-only -
+    no queue item actions. Closing the window stops polling; there is no
+    reopen control, by design (see docs/superpowers/specs/2026-08-02-
+    lidarr-queue-window-design.md)."""
+
+    COLUMNS = ["Title", "Status", "Quality", "Progress", "Time left"]
+
+    def __init__(self, base_url: str, api_key: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.base_url = base_url
+        self.api_key = api_key
+        self.worker: LidarrQueueWorker | None = None
+
+        self.setWindowTitle("Lidarr Queue")
+        self.resize(720, 400)
+
+        layout = QVBoxLayout(self)
+        self.table = QTableWidget(0, len(self.COLUMNS))
+        self.table.setHorizontalHeaderLabels(self.COLUMNS)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionMode(QAbstractItemView.NoSelection)
+        layout.addWidget(self.table)
+
+        self.status_label = QLabel("Loading...")
+        layout.addWidget(self.status_label)
+
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self._poll)
+        self.timer.start(QUEUE_POLL_INTERVAL_MS)
+        self._poll()
+
+    def _poll(self) -> None:
+        if self.worker is not None and self.worker.isRunning():
+            return
+        self.worker = LidarrQueueWorker(self.base_url, self.api_key)
+        self.worker.queue_finished.connect(self._on_queue_finished)
+        self.worker.queue_error.connect(self._on_queue_error)
+        self.worker.start()
+
+    def _on_queue_finished(self, records: list[Any]) -> None:
+        self.table.setRowCount(len(records))
+        for row, record in enumerate(records):
+            self.table.setItem(row, 0, QTableWidgetItem(_queue_record_title(record)))
+            self.table.setItem(row, 1, QTableWidgetItem(_queue_record_status(record)))
+            self.table.setItem(row, 2, QTableWidgetItem((record.get("quality") or {}).get("quality", {}).get("name", "")))
+            self.table.setItem(row, 3, QTableWidgetItem(_queue_record_progress(record)))
+            self.table.setItem(row, 4, QTableWidgetItem(record.get("timeleft") or ""))
+        self.status_label.setText("Queue is empty." if not records else "")
+
+    def _on_queue_error(self, message: str) -> None:
+        self.status_label.setText(message)
+
+    def closeEvent(self, event: Any) -> None:
+        self.timer.stop()
+        super().closeEvent(event)
 
 
 class DeclutterScanWorker(QThread):
