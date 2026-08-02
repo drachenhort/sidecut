@@ -289,6 +289,9 @@ class LidarrQueueWorker(QThread):
         except lidarr.LidarrError as exc:
             self.queue_error.emit(str(exc))
             return
+        except Exception as exc:  # noqa: BLE001 - malformed API response, report to the UI
+            self.queue_error.emit(f"Failed to read the Lidarr queue: {exc}")
+            return
         self.queue_finished.emit(records)
 
 
@@ -585,7 +588,7 @@ def _queue_record_title(record: dict[str, Any]) -> str:
         return f"{artist_name} - {album_title}"
     if album_title:
         return album_title
-    return record.get("title", "")
+    return record.get("title") or ""
 
 
 def _queue_record_status(record: dict[str, Any]) -> str:
@@ -655,7 +658,7 @@ class LidarrQueueWindow(QDialog):
         self.worker.queue_error.connect(self._on_queue_error)
         self.worker.start()
 
-    def _on_queue_finished(self, records: list[Any]) -> None:
+    def _on_queue_finished(self, records: list[dict[str, Any]]) -> None:
         self.table.setRowCount(len(records))
         for row, record in enumerate(records):
             self.table.setItem(row, 0, QTableWidgetItem(_queue_record_title(record)))
@@ -670,6 +673,8 @@ class LidarrQueueWindow(QDialog):
 
     def closeEvent(self, event: Any) -> None:
         self.timer.stop()
+        if self.worker is not None:
+            self.worker.wait(5000)
         super().closeEvent(event)
 
 

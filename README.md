@@ -119,6 +119,14 @@ In the window:
   Lidarr's own command status (queued/started/completed) - so a multi-album
   import never looks like it's just hanging. The window stays open after
   the import finishes (or fails) so you can scroll back through it.
+- If a Lidarr URL/API key are already configured in Settings..., a
+  separate **Lidarr Queue** window opens automatically on startup,
+  showing Lidarr's live download queue (`GET /api/v1/queue`): title,
+  status, quality, progress, and time left, refreshing every 5 seconds
+  on its own - no manual refresh needed. It's read-only (no queue item
+  actions) and has no reopen control: closing it stops polling for the
+  rest of the session. This is deliberate, not a bug - if you close it
+  and want it back, restart the app.
 - Tick **Auto-import to Lidarr after conversion** to skip that manual
   click: whenever **Transcode** finishes converting at least one file, the
   same import runs automatically right after. Off by default. It only

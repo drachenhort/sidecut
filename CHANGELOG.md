@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 ## [Unreleased]
 
 ### Added
+- New **Lidarr Queue** window: when a Lidarr URL/API key are already
+  configured, it auto-opens on startup and shows Lidarr's live download
+  queue (title, status, quality, progress, time left), polling
+  `GET /api/v1/queue` every 5 seconds so you can watch downloads progress
+  without switching to Lidarr's own UI. It's read-only, and closing it
+  stops polling for the rest of the session - there's no reopen control,
+  by design, since re-adding one would mean tracking window lifecycle
+  state that isn't worth the complexity for a convenience view.
 - New **Force Reimport...** button next to Import to Lidarr: unlike a plain
   import (which always skips files Lidarr already has a track file record
   for), this reimports everything, including already-tracked files - useful
