@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 ## [Unreleased]
 
 ### Added
+- New **Force Reimport...** button next to Import to Lidarr: unlike a plain
+  import (which always skips files Lidarr already has a track file record
+  for), this reimports everything, including already-tracked files - useful
+  after correcting tags on a file Lidarr previously matched wrong. Lidarr's
+  only way to drop a TrackFile record (`DELETE /api/v1/trackfile`) always
+  deletes the underlying file too, so nothing is ever deleted here: each
+  already-tracked file is moved aside to a temporary holding folder first,
+  which lets Lidarr's existing existence-checked stale-trackfile cleanup
+  safely drop just the database record, then the file is moved straight
+  back before the normal reimport runs (`lidarr.force_reimport_folder`).
+  Before anything happens, a dry-run preview dialog
+  (`lidarr.plan_force_reimport`) lists exactly which files are in scope and
+  flags this path as new and not battle-tested - nothing runs until
+  Proceed is clicked.
 - Collection Summary now also shows a second chart classifying each release
   as Original, Reissue, or Compilation, using the `releasetype`
   compilation secondary type and a `date`/`originaldate` mismatch

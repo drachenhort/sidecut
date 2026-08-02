@@ -913,3 +913,183 @@ def test_import_folder_raises_on_lidarr_reported_failure() -> None:
     ):
         with pytest.raises(lidarr.LidarrError, match="disk full"):
             lidarr.import_folder("http://localhost:8686", "key", Path("/music"))
+
+
+def test_plan_force_reimport_raises_when_no_artist_matches_the_folder() -> None:
+    with patch("requests.get", return_value=_no_artist_match_response()):
+        with pytest.raises(lidarr.LidarrError, match="No Lidarr artist found"):
+            lidarr.plan_force_reimport("http://localhost:8686", "key", Path("/music/Unknown Artist"))
+
+
+def test_plan_force_reimport_is_read_only(tmp_path: Path) -> None:
+    # The dry-run preview must never touch the filesystem or call
+    # DELETE/POST - just resolve the artist and list what's in scope.
+    folder = tmp_path / "Jelly Roll"
+    folder.mkdir()
+    (folder / "song.mp3").write_bytes(b"data")
+
+    artist_response = Mock()
+    artist_response.json.return_value = [{"id": 434, "path": "/music/Jelly Roll"}]
+    trackfiles_response = Mock()
+    trackfiles_response.json.return_value = [
+        {"id": 1, "path": "/music/Jelly Roll/song.mp3"},
+        {"id": 2, "path": "/music/Jelly Roll/gone.mp3"},  # no longer on disk
+    ]
+
+    with (
+        patch("requests.get", side_effect=[artist_response, trackfiles_response]),
+        patch("requests.delete") as delete,
+        patch("requests.post") as post,
+    ):
+        in_scope = lidarr.plan_force_reimport(
+            "http://localhost:8686", "key", folder, local_root=str(tmp_path), lidarr_root="/music"
+        )
+
+    assert [tf["id"] for tf, _path in in_scope] == [1]
+    assert (folder / "song.mp3").exists()
+    delete.assert_not_called()
+    post.assert_not_called()
+
+
+def test_force_reimport_folder_raises_when_no_artist_matches_the_folder() -> None:
+    with patch("requests.get", return_value=_no_artist_match_response()):
+        with pytest.raises(lidarr.LidarrError, match="No Lidarr artist found"):
+            lidarr.force_reimport_folder("http://localhost:8686", "key", Path("/music/Unknown Artist"))
+
+
+def test_force_reimport_folder_moves_file_aside_deletes_record_then_moves_it_back(tmp_path: Path) -> None:
+    folder = tmp_path / "Jelly Roll"
+    folder.mkdir()
+    (folder / "song.mp3").write_bytes(b"data")
+
+    artist_response = Mock()
+    artist_response.json.return_value = [{"id": 434, "path": "/music/Jelly Roll"}]
+    trackfiles_response = Mock()
+    trackfiles_response.json.return_value = [{"id": 1, "path": "/music/Jelly Roll/song.mp3"}]
+    # The nested import_folder() call re-resolves the artist and re-checks
+    # for stale trackfiles from scratch - by then the record above is
+    # already gone and the file already moved back, so nothing left to do.
+    reimport_artist_response = Mock()
+    reimport_artist_response.json.return_value = [{"id": 434, "path": "/music/Jelly Roll"}]
+    reimport_trackfiles_response = Mock()
+    reimport_trackfiles_response.json.return_value = []
+    candidates_response = Mock()
+    candidates_response.json.return_value = []
+
+    with (
+        patch(
+            "requests.get",
+            side_effect=[
+                artist_response,
+                trackfiles_response,
+                reimport_artist_response,
+                reimport_trackfiles_response,
+                candidates_response,
+            ],
+        ),
+        patch("requests.delete", return_value=Mock(status_code=200)) as delete,
+    ):
+        imported, skipped, skipped_names = lidarr.force_reimport_folder(
+            "http://localhost:8686", "key", folder, local_root=str(tmp_path), lidarr_root="/music"
+        )
+
+    deleted_ids = [call.args[0].rsplit("/", 1)[-1] for call in delete.call_args_list]
+    assert deleted_ids == ["1"]
+    assert (folder / "song.mp3").exists()  # moved back, never deleted
+    assert imported == 0
+    assert skipped == 0
+    assert not list(folder.parent.glob(".flac2mp3-reimport-*"))  # holding dir cleaned up
+
+
+def test_force_reimport_folder_moves_file_back_even_if_deleting_its_record_fails(tmp_path: Path) -> None:
+    folder = tmp_path / "Jelly Roll"
+    folder.mkdir()
+    (folder / "song.mp3").write_bytes(b"data")
+
+    artist_response = Mock()
+    artist_response.json.return_value = [{"id": 434, "path": "/music/Jelly Roll"}]
+    trackfiles_response = Mock()
+    trackfiles_response.json.return_value = [{"id": 1, "path": "/music/Jelly Roll/song.mp3"}]
+
+    delete_response = Mock(status_code=500)
+    delete_response.raise_for_status.side_effect = requests.HTTPError("boom")
+
+    with (
+        patch("requests.get", side_effect=[artist_response, trackfiles_response]),
+        patch("requests.delete", return_value=delete_response),
+    ):
+        with pytest.raises(lidarr.LidarrError):
+            lidarr.force_reimport_folder(
+                "http://localhost:8686", "key", folder, local_root=str(tmp_path), lidarr_root="/music"
+            )
+
+    assert (folder / "song.mp3").exists()  # restored despite the delete failure
+    assert not list(folder.parent.glob(".flac2mp3-reimport-*"))  # holding dir cleaned up
+
+
+def test_force_reimport_folder_ignores_trackfiles_outside_the_folder(tmp_path: Path) -> None:
+    folder = tmp_path / "Jelly Roll" / "Album One"
+    folder.mkdir(parents=True)
+    (folder / "song.mp3").write_bytes(b"data")
+    other_album = tmp_path / "Jelly Roll" / "Album Two"
+    other_album.mkdir()
+    (other_album / "other.mp3").write_bytes(b"data")
+
+    artist_response = Mock()
+    artist_response.json.return_value = [{"id": 434, "path": "/music/Jelly Roll"}]
+    trackfiles_response = Mock()
+    # This artist has trackfiles in another album too - only the one under
+    # `folder` should ever be touched.
+    trackfiles_response.json.return_value = [
+        {"id": 1, "path": "/music/Jelly Roll/Album One/song.mp3"},
+        {"id": 2, "path": "/music/Jelly Roll/Album Two/other.mp3"},
+    ]
+    candidates_response = Mock()
+    candidates_response.json.return_value = []
+    reimport_trackfiles_response = Mock()
+    reimport_trackfiles_response.json.return_value = []
+
+    with (
+        patch(
+            "requests.get",
+            side_effect=[
+                artist_response,
+                trackfiles_response,
+                artist_response,
+                reimport_trackfiles_response,
+                candidates_response,
+            ],
+        ),
+        patch("requests.delete", return_value=Mock(status_code=200)) as delete,
+    ):
+        lidarr.force_reimport_folder(
+            "http://localhost:8686", "key", folder, local_root=str(tmp_path), lidarr_root="/music"
+        )
+
+    deleted_ids = [call.args[0].rsplit("/", 1)[-1] for call in delete.call_args_list]
+    assert deleted_ids == ["1"]
+    assert (other_album / "other.mp3").exists()  # never touched
+
+
+def test_force_reimport_folder_skips_move_when_nothing_in_scope() -> None:
+    # No trackfiles at all under this folder - just falls through to a
+    # plain import_folder(), no holding directory ever created.
+    artist_response = Mock()
+    artist_response.json.return_value = [{"id": 434, "path": "/music/Jelly Roll"}]
+    trackfiles_response = Mock()
+    trackfiles_response.json.return_value = []
+    reimport_trackfiles_response = Mock()
+    reimport_trackfiles_response.json.return_value = []
+    candidates_response = Mock()
+    candidates_response.json.return_value = []
+
+    with patch(
+        "requests.get",
+        side_effect=[artist_response, trackfiles_response, artist_response, reimport_trackfiles_response, candidates_response],
+    ):
+        imported, skipped, skipped_names = lidarr.force_reimport_folder(
+            "http://localhost:8686", "key", Path("/music/Jelly Roll")
+        )
+
+    assert imported == 0
+    assert skipped == 0

@@ -29,8 +29,11 @@ the same thing yourself.
 
 from __future__ import annotations
 
+import contextlib
 import re
+import shutil
 import time
+import uuid
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
@@ -695,3 +698,122 @@ def import_folder(
 
     _report(on_progress, f"Done: {imported} imported, {len(skipped)} skipped")
     return imported, len(skipped), skipped_names
+
+
+def plan_force_reimport(
+    base_url: str,
+    api_key: str,
+    folder: Path,
+    local_root: str = "",
+    lidarr_root: str = "",
+    on_progress: OnProgress = None,
+) -> list[tuple[dict[str, Any], Path]]:
+    """Read-only dry-run preview for force_reimport_folder: resolves the
+    Lidarr artist for `folder` and returns every (trackfile, local_path)
+    pair under it that force_reimport_folder would move aside, clear the
+    record for, and reimport - without moving, deleting, or reimporting
+    anything. Safe to call any number of times; touches no state besides
+    two GET requests.
+
+    Raises LidarrError if `folder` doesn't resolve to a known Lidarr
+    artist - without that, which TrackFile records belong to this folder
+    can't be determined safely."""
+    lidarr_folder = remap_path_to_lidarr(folder, local_root, lidarr_root)
+    _report(on_progress, f"Resolving artist for {lidarr_folder}...")
+    artist_id = get_artist_id_for_path(base_url, api_key, lidarr_folder)
+    if artist_id is None:
+        raise LidarrError(
+            f"No Lidarr artist found at '{lidarr_folder}' - can't safely determine which track file "
+            "records belong to this folder."
+        )
+
+    _report(on_progress, "Looking up existing track file records...")
+    trackfiles = get_artist_trackfiles(base_url, api_key, artist_id)
+    in_scope: list[tuple[dict[str, Any], Path]] = []
+    for trackfile in trackfiles:
+        local_path = lidarr_path_to_local(trackfile["path"], local_root, lidarr_root)
+        try:
+            local_path.relative_to(folder)
+        except ValueError:
+            continue
+        if local_path.exists():
+            in_scope.append((trackfile, local_path))
+    _report(on_progress, f"{len(in_scope)} track file record(s) under this folder")
+    return in_scope
+
+
+def force_reimport_folder(
+    base_url: str,
+    api_key: str,
+    folder: Path,
+    import_mode: str = "auto",
+    local_root: str = "",
+    lidarr_root: str = "",
+    on_progress: OnProgress = None,
+) -> tuple[int, int, list[str]]:
+    """Force Lidarr to fully reimport `folder`, including files it already
+    has a TrackFile record for - unlike import_folder, which always skips
+    those (filterExistingFiles=true on the manual-import scan). Useful
+    after correcting tags on files Lidarr already imported with a wrong or
+    stale match. See plan_force_reimport for a read-only preview of what
+    this will do, without doing it.
+
+    Lidarr's only way to remove a TrackFile record - DELETE
+    /api/v1/trackfile - always deletes the underlying file too (see the
+    module docstring); there is no "forget the record, keep the file" API
+    call. To force a reimport without ever actually deleting anything,
+    every already-tracked file under `folder` is moved aside to a
+    temporary holding directory first, so Lidarr's existing
+    existence-checked stale-trackfile cleanup (see
+    _delete_genuinely_stale_trackfiles) sees each one as genuinely gone
+    and safely drops just its database record; every file is then moved
+    straight back to its original path before the normal import scan
+    runs. Even if this is interrupted partway, no file is ever deleted -
+    at worst one is left sitting in the holding directory (named in the
+    raised error) instead of back in place.
+
+    Raises LidarrError if `folder` doesn't resolve to a known Lidarr
+    artist - without that, which TrackFile records belong to this folder
+    can't be determined safely."""
+    in_scope = plan_force_reimport(base_url, api_key, folder, local_root, lidarr_root, on_progress)
+
+    if not in_scope:
+        _report(on_progress, "No existing Lidarr track file records under this folder - nothing to clear")
+        return import_folder(base_url, api_key, folder, import_mode, local_root, lidarr_root, on_progress)
+
+    _report(on_progress, f"Moving {len(in_scope)} tracked file(s) aside to clear their Lidarr records...")
+    holding_dir = folder.parent / f".flac2mp3-reimport-{uuid.uuid4().hex[:8]}"
+    holding_dir.mkdir()
+    moved: list[tuple[dict[str, Any], Path, Path]] = []  # (trackfile, original_path, holding_path)
+    try:
+        for trackfile, local_path in in_scope:
+            holding_path = holding_dir / local_path.relative_to(folder)
+            holding_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(local_path), str(holding_path))
+            moved.append((trackfile, local_path, holding_path))
+
+        deleted = _delete_genuinely_stale_trackfiles(
+            base_url, api_key, [tf for tf, _, _ in moved], local_root, lidarr_root, on_progress
+        )
+        _report(on_progress, f"Cleared {deleted} track file record(s)")
+    finally:
+        _report(on_progress, "Moving file(s) back...")
+        restore_failures = []
+        for _trackfile, original_path, holding_path in moved:
+            if not holding_path.exists():
+                continue  # nothing left to restore
+            try:
+                original_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(holding_path), str(original_path))
+            except OSError as exc:
+                restore_failures.append(f"{holding_path} -> {original_path}: {exc}")
+        with contextlib.suppress(OSError):
+            holding_dir.rmdir()  # only succeeds once empty, i.e. everything was restored
+        if restore_failures:
+            raise LidarrError(
+                "Failed to move some file(s) back after clearing their Lidarr records - they're still "
+                "safe in the holding directory, not deleted: " + "; ".join(restore_failures)
+            )
+
+    _report(on_progress, "Re-scanning and reimporting...")
+    return import_folder(base_url, api_key, folder, import_mode, local_root, lidarr_root, on_progress)

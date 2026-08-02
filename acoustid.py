@@ -171,14 +171,13 @@ class BatchConverter(QThread):
         self.batch_finished.emit(ok_count, fail_count, str(self.log_path), src_bytes, dst_bytes)
 
 
-class LidarrImportWorker(QThread):
-    """Hands a folder to Lidarr's Manual Import API in the background so the
-    UI doesn't block on the network round-trip. Entirely independent of
-    BatchConverter/self.files - it just tells Lidarr which folder to scan."""
+class LidarrForceReimportPlanWorker(QThread):
+    """Runs lidarr.plan_force_reimport() off the UI thread - a read-only
+    dry-run preview of what Force Reimport would do, so ForceReimportPreviewDialog
+    can show real data instead of a generic warning."""
 
-    import_finished = Signal(int, int, str)  # imported_count, skipped_count, "; "-joined skipped names
-    import_error = Signal(str)
-    import_progress = Signal(str)  # one line per step, e.g. "Submitting batch 2/5..."
+    plan_finished = Signal(object)  # list[tuple[dict, Path]]
+    plan_error = Signal(str)
 
     def __init__(
         self, base_url: str, api_key: str, folder: Path, local_root: str = "", lidarr_root: str = ""
@@ -191,12 +190,54 @@ class LidarrImportWorker(QThread):
         self.lidarr_root = lidarr_root
 
     def run(self) -> None:
+        try:
+            in_scope = lidarr.plan_force_reimport(
+                self.base_url, self.api_key, self.folder, self.local_root, self.lidarr_root
+            )
+        except lidarr.LidarrError as exc:
+            self.plan_error.emit(str(exc))
+            return
+        self.plan_finished.emit(in_scope)
+
+
+class LidarrImportWorker(QThread):
+    """Hands a folder to Lidarr's Manual Import API in the background so the
+    UI doesn't block on the network round-trip. Entirely independent of
+    BatchConverter/self.files - it just tells Lidarr which folder to scan."""
+
+    import_finished = Signal(int, int, str)  # imported_count, skipped_count, "; "-joined skipped names
+    import_error = Signal(str)
+    import_progress = Signal(str)  # one line per step, e.g. "Submitting batch 2/5..."
+
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        folder: Path,
+        local_root: str = "",
+        lidarr_root: str = "",
+        force: bool = False,
+    ) -> None:
+        super().__init__()
+        self.base_url = base_url
+        self.api_key = api_key
+        self.folder = folder
+        self.local_root = local_root
+        self.lidarr_root = lidarr_root
+        # force=True runs lidarr.force_reimport_folder instead of the
+        # plain import_folder - see that function's docstring for how it
+        # clears Lidarr's existing TrackFile records under `folder`
+        # without ever deleting a file.
+        self.force = force
+
+    def run(self) -> None:
         # Qt signal emission is thread-safe: emitting from this worker
         # thread queues the connected slot to run on the receiver's own
         # thread (the GUI thread), so this callback never touches widgets
         # directly.
+        import_func = lidarr.force_reimport_folder if self.force else lidarr.import_folder
         try:
-            imported, skipped, skipped_names = lidarr.import_folder(
+            imported, skipped, skipped_names = import_func(
                 self.base_url,
                 self.api_key,
                 self.folder,
@@ -267,6 +308,49 @@ class LidarrImportLogWindow(QDialog):
 
     def append_line(self, message: str) -> None:
         self.text.appendPlainText(message)
+
+
+class ForceReimportPreviewDialog(QDialog):
+    """Dry-run preview for Force Reimport: shows exactly which files
+    lidarr.force_reimport_folder would move aside, clear the Lidarr
+    record for, and reimport - built from lidarr.plan_force_reimport, a
+    read-only call - before anything actually moves, is deleted, or gets
+    reimported. Proceed only becomes available after seeing the real
+    list; closing/Cancel does nothing at all."""
+
+    def __init__(self, in_scope: list[tuple[dict, Path]], folder: Path, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Force Reimport - Preview")
+        self.resize(640, 480)
+        self.setModal(True)
+
+        layout = QVBoxLayout(self)
+        warning = QLabel(
+            "<b>This path is new and not battle-tested - use with caution, and make sure "
+            "this is really what you want.</b><br><br>"
+            + (
+                f"{len(in_scope)} file(s) already tracked by Lidarr under {folder} would be moved aside, "
+                "have their Lidarr track file record cleared, moved straight back, then reimported. "
+                "No file should ever be deleted, but this does briefly move your real files."
+                if in_scope
+                else "No existing Lidarr track file records were found under this folder - this would "
+                "just run a plain import, identical to the Import to Lidarr button."
+            )
+        )
+        warning.setWordWrap(True)
+        layout.addWidget(warning)
+
+        if in_scope:
+            file_list = QPlainTextEdit(self)
+            file_list.setReadOnly(True)
+            file_list.setPlainText("\n".join(str(path.relative_to(folder)) for _trackfile, path in in_scope))
+            layout.addWidget(file_list)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        proceed_button = buttons.addButton("Proceed", QDialogButtonBox.AcceptRole)
+        proceed_button.clicked.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
 
 
 class _HoverRevealButton(QPushButton):
@@ -616,6 +700,7 @@ class MainWindow(QMainWindow):
         self.files: list[Path] = []
         self.converter: BatchConverter | None = None
         self.lidarr_worker: LidarrImportWorker | None = None
+        self.lidarr_force_reimport_plan_worker: LidarrForceReimportPlanWorker | None = None
         self.lidarr_log_window: LidarrImportLogWindow | None = None
         self.library_stats_worker: LibraryStatsWorker | None = None
         self.library_stats_window: LibraryStatsWindow | None = None
@@ -807,10 +892,24 @@ class MainWindow(QMainWindow):
         self.lidarr_import_button.setEnabled(False)
         self.lidarr_import_button.clicked.connect(self._start_lidarr_import)
 
+        self.lidarr_force_reimport_button = QPushButton("Force Reimport...")
+        self.lidarr_force_reimport_button.setToolTip(
+            "Like Import to Lidarr, but also reimports files Lidarr already has a track file\n"
+            "record for (a plain import always skips those) - useful after correcting tags on\n"
+            "files Lidarr already matched wrong. Lidarr's only way to drop a track file record\n"
+            "always deletes the file too, so nothing is deleted here: each already-tracked file\n"
+            "is moved aside, Lidarr's own safe cleanup drops the now-genuinely-missing record,\n"
+            "then the file is moved straight back before reimporting. Shows a dry-run preview\n"
+            "of exactly which files are in scope before anything actually happens."
+        )
+        self.lidarr_force_reimport_button.setEnabled(False)
+        self.lidarr_force_reimport_button.clicked.connect(self._start_lidarr_force_reimport)
+
         row.addWidget(self.lidarr_autoimport_checkbox)
         row.addStretch(1)
         row.addWidget(settings_button)
         row.addWidget(self.lidarr_import_button)
+        row.addWidget(self.lidarr_force_reimport_button)
         return row
 
     def _open_lidarr_settings(self) -> None:
@@ -840,6 +939,7 @@ class MainWindow(QMainWindow):
         self.checkonly_button.setEnabled(bool(self.files))
         self.checkonly_mp3_button.setEnabled(True)
         self.lidarr_import_button.setEnabled(True)
+        self.lidarr_force_reimport_button.setEnabled(True)
         self.library_stats_button.setEnabled(True)
         self.sort_declutter_button.setEnabled(True)
         if self.files:
@@ -898,6 +998,44 @@ class MainWindow(QMainWindow):
         self._run_batch(files, acoustid_apikey, acoustid_only=True, log_prefix="acoustid-check-mp3")
 
     def _start_lidarr_import(self) -> None:
+        self._run_lidarr_import(force=False)
+
+    def _start_lidarr_force_reimport(self) -> None:
+        base_url = self.settings.value("lidarr_url", "")
+        api_key = self.settings.value("lidarr_api_key", "")
+        if not base_url or not api_key:
+            QMessageBox.critical(
+                self, "AcoustID", "Set the Lidarr URL and API key first, via Settings..."
+            )
+            return
+
+        folder = Path(self.folder_edit.text())
+        local_root = self.settings.value("lidarr_local_root", "")
+        lidarr_root = self.settings.value("lidarr_root", "")
+        self.lidarr_force_reimport_button.setEnabled(False)
+        self.status_label.setText(f"Checking what Force Reimport would do under {folder}...")
+
+        self.lidarr_force_reimport_plan_worker = LidarrForceReimportPlanWorker(
+            base_url, api_key, folder, local_root, lidarr_root
+        )
+        self.lidarr_force_reimport_plan_worker.plan_finished.connect(self._on_force_reimport_plan_finished)
+        self.lidarr_force_reimport_plan_worker.plan_error.connect(self._on_force_reimport_plan_error)
+        self.lidarr_force_reimport_plan_worker.start()
+
+    def _on_force_reimport_plan_finished(self, in_scope: list[tuple[dict, Path]]) -> None:
+        self.lidarr_force_reimport_button.setEnabled(True)
+        self.status_label.setText(f"Force Reimport preview: {len(in_scope)} tracked file(s) in scope")
+        folder = Path(self.folder_edit.text())
+        dialog = ForceReimportPreviewDialog(in_scope, folder, self)
+        if dialog.exec() == QDialog.Accepted:
+            self._run_lidarr_import(force=True)
+
+    def _on_force_reimport_plan_error(self, message: str) -> None:
+        self.lidarr_force_reimport_button.setEnabled(True)
+        self.status_label.setText(f"Force Reimport preview failed: {message}")
+        QMessageBox.critical(self, "AcoustID", message)
+
+    def _run_lidarr_import(self, force: bool) -> None:
         base_url = self.settings.value("lidarr_url", "")
         api_key = self.settings.value("lidarr_api_key", "")
         if not base_url or not api_key:
@@ -910,15 +1048,17 @@ class MainWindow(QMainWindow):
         local_root = self.settings.value("lidarr_local_root", "")
         lidarr_root = self.settings.value("lidarr_root", "")
         self.lidarr_import_button.setEnabled(False)
-        self.status_label.setText(f"Handing {folder} to Lidarr's Manual Import API...")
+        self.lidarr_force_reimport_button.setEnabled(False)
+        verb = "Force-reimporting" if force else "Handing"
+        self.status_label.setText(f"{verb} {folder} {'via' if force else 'to'} Lidarr's Manual Import API...")
 
         if self.lidarr_log_window is None:
             self.lidarr_log_window = LidarrImportLogWindow(self)
-        self.lidarr_log_window.reset(f"Lidarr import - {folder.name}")
+        self.lidarr_log_window.reset(f"Lidarr {'force reimport' if force else 'import'} - {folder.name}")
         self.lidarr_log_window.show()
         self.lidarr_log_window.raise_()
 
-        self.lidarr_worker = LidarrImportWorker(base_url, api_key, folder, local_root, lidarr_root)
+        self.lidarr_worker = LidarrImportWorker(base_url, api_key, folder, local_root, lidarr_root, force=force)
         self.lidarr_worker.import_progress.connect(self.lidarr_log_window.append_line)
         self.lidarr_worker.import_finished.connect(self._on_lidarr_import_finished)
         self.lidarr_worker.import_error.connect(self._on_lidarr_import_error)
@@ -926,6 +1066,7 @@ class MainWindow(QMainWindow):
 
     def _on_lidarr_import_finished(self, imported: int, skipped: int, skipped_names: str) -> None:
         self.lidarr_import_button.setEnabled(True)
+        self.lidarr_force_reimport_button.setEnabled(True)
         self.status_label.setText(f"Lidarr import: {imported} imported, {skipped} skipped")
         message = f"Lidarr imported {imported} file(s)."
         if skipped:
@@ -934,6 +1075,7 @@ class MainWindow(QMainWindow):
 
     def _on_lidarr_import_error(self, message: str) -> None:
         self.lidarr_import_button.setEnabled(True)
+        self.lidarr_force_reimport_button.setEnabled(True)
         self.status_label.setText(f"Lidarr import failed: {message}")
         if self.lidarr_log_window is not None:
             self.lidarr_log_window.append_line(f"FAILED: {message}")
