@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.7]
+
 ### Added
 - New **Lidarr Queue** window: when a Lidarr URL/API key are already
   configured, it auto-opens on startup and shows Lidarr's live download
