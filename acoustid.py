@@ -608,6 +608,11 @@ def _queue_record_progress(record: dict[str, Any]) -> str:
     return f"{percent:.0f}%"
 
 
+def _queue_record_quality(record: dict[str, Any]) -> str:
+    quality = (record.get("quality") or {}).get("quality") or {}
+    return quality.get("name", "")
+
+
 class LidarrQueueWindow(QDialog):
     """Standalone, non-modal window showing Lidarr's live download queue
     (GET /api/v1/queue), polled every QUEUE_POLL_INTERVAL_MS. Read-only -
@@ -655,7 +660,7 @@ class LidarrQueueWindow(QDialog):
         for row, record in enumerate(records):
             self.table.setItem(row, 0, QTableWidgetItem(_queue_record_title(record)))
             self.table.setItem(row, 1, QTableWidgetItem(_queue_record_status(record)))
-            self.table.setItem(row, 2, QTableWidgetItem((record.get("quality") or {}).get("quality", {}).get("name", "")))
+            self.table.setItem(row, 2, QTableWidgetItem(_queue_record_quality(record)))
             self.table.setItem(row, 3, QTableWidgetItem(_queue_record_progress(record)))
             self.table.setItem(row, 4, QTableWidgetItem(record.get("timeleft") or ""))
         self.status_label.setText("Queue is empty." if not records else "")
