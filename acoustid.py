@@ -144,6 +144,18 @@ class BatchConverter(QThread):
         self.file_finished.emit(index, result.ok)
         return result
 
+    class _LockedLog:
+        """Serializes writes from multiple worker threads so log lines from
+        different files never interleave mid-write."""
+
+        def __init__(self, log: TextIO) -> None:
+            self._log = log
+            self._lock = threading.Lock()
+
+        def write(self, text: str) -> None:
+            with self._lock:
+                self._log.write(text)
+
     def _open_log(self) -> TextIO:
         try:
             return self.log_path.open("a", encoding="utf-8")
@@ -161,7 +173,8 @@ class BatchConverter(QThread):
             return
 
         with log, ThreadPoolExecutor(self.workers) as pool:
-            futures = [pool.submit(self._convert, i, f, log) for i, f in enumerate(self.files)]
+            locked_log = self._LockedLog(log)
+            futures = [pool.submit(self._convert, i, f, locked_log) for i, f in enumerate(self.files)]
             results = [f.result() for f in futures]
 
         ok_count = sum(r.ok for r in results)

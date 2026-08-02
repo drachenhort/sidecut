@@ -660,6 +660,9 @@ def _apply_progress_line(progress: Progress, line: str, total_duration: float | 
         progress.percent = min(100.0, progress.out_time_seconds / total_duration * 100)
 
 
+CANCEL_KILL_TIMEOUT = 5.0
+
+
 def run_ffmpeg(
     src: Path,
     dst: Path,
@@ -698,8 +701,14 @@ def run_ffmpeg(
         _apply_progress_line(progress, line.strip(), total_duration)
         if on_progress is not None:
             on_progress(progress)
+    try:
+        proc.wait(timeout=CANCEL_KILL_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        # ffmpeg ignored SIGTERM (e.g. stuck on a stalled network mount) -
+        # escalate rather than block the worker thread forever.
+        proc.kill()
+        proc.wait()
     stderr_thread.join()
-    proc.wait()
     if stderr_chunks:
         log.write("".join(stderr_chunks))
     return proc.returncode == 0
@@ -732,7 +741,13 @@ def convert_one(
 
         if ok:
             dst_bytes = dst.stat().st_size
-            src.unlink()
+            try:
+                src.unlink()
+            except OSError as exc:
+                # dst is a complete, correctly-tagged conversion; failing to
+                # remove src afterwards must not be treated as a failed
+                # conversion or trigger deleting the finished dst below.
+                log.write(f"warning: converted {src} but could not delete source: {exc}\n")
             return ConversionResult(src, True, src_bytes=src_bytes, dst_bytes=dst_bytes)
     except Exception as exc:  # noqa: BLE001 - keep the batch going, report and move on
         dst.unlink(missing_ok=True)

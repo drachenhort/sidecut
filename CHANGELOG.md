@@ -4,6 +4,23 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- `convert_one` no longer deletes a fully converted, correctly tagged MP3
+  just because removing the source FLAC afterwards failed (e.g. a
+  transient NFS/permission error) - the conversion is now reported as
+  successful and the leftover source is logged as a warning instead.
+- `run_ffmpeg` cancellation no longer hangs forever if ffmpeg ignores
+  SIGTERM (e.g. stuck on a stalled network mount): it now escalates to
+  `SIGKILL` after a 5-second grace period.
+- The AcoustID batch worker's shared log file is now written through a
+  lock, so log lines from concurrently converting files can no longer
+  interleave mid-write.
+- `lidarr.get_queue`, `_queue_command`, and `_to_import_file` now raise
+  `LidarrError` (instead of a bare `KeyError`/`TypeError`) on an
+  unexpected/malformed Lidarr API response, so `lidarr_hook.py`'s
+  single `except LidarrError` handler catches them too instead of
+  crashing the headless import.
+
 ## [0.7]
 
 ### Added

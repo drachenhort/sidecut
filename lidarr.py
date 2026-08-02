@@ -379,7 +379,10 @@ def _queue_command(base_url: str, api_key: str, payload: dict[str, Any]) -> int:
         response.raise_for_status()
     except requests.RequestException as exc:
         raise LidarrError(f"Failed to queue the '{payload.get('name')}' command: {exc}") from exc
-    return response.json()["id"]
+    try:
+        return response.json()["id"]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise LidarrError(f"Unexpected response queuing the '{payload.get('name')}' command: {exc}") from exc
 
 
 def _to_import_file(item: dict[str, Any]) -> dict[str, Any]:
@@ -388,16 +391,19 @@ def _to_import_file(item: dict[str, Any]) -> dict[str, Any]:
     POST /api/v1/command's ManualImport actually expects (artistId/albumId/
     trackIds as bare ids). Forwarding the raw GET item as-is silently sends
     artistId=0/albumId=0 and the command never progresses past "queued"."""
-    return {
-        "path": item["path"],
-        "artistId": item["artist"]["id"],
-        "albumId": item["album"]["id"],
-        "albumReleaseId": item["albumReleaseId"],
-        "trackIds": [t["id"] for t in item["tracks"]],
-        "quality": item["quality"],
-        "indexerFlags": item.get("indexerFlags", 0),
-        "disableReleaseSwitching": item.get("disableReleaseSwitching", False),
-    }
+    try:
+        return {
+            "path": item["path"],
+            "artistId": item["artist"]["id"],
+            "albumId": item["album"]["id"],
+            "albumReleaseId": item["albumReleaseId"],
+            "trackIds": [t["id"] for t in item["tracks"]],
+            "quality": item["quality"],
+            "indexerFlags": item.get("indexerFlags", 0),
+            "disableReleaseSwitching": item.get("disableReleaseSwitching", False),
+        }
+    except (KeyError, TypeError) as exc:
+        raise LidarrError(f"Unexpected manual-import candidate shape: {exc}") from exc
 
 
 def submit_manual_import(
@@ -462,7 +468,10 @@ def get_queue(base_url: str, api_key: str) -> list[dict[str, Any]]:
         response.raise_for_status()
     except requests.RequestException as exc:
         raise LidarrError(f"Failed to fetch the Lidarr queue: {exc}") from exc
-    return response.json()["records"]
+    try:
+        return response.json()["records"]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise LidarrError(f"Unexpected response fetching the Lidarr queue: {exc}") from exc
 
 
 def delete_trackfile(base_url: str, api_key: str, trackfile_id: int) -> None:
