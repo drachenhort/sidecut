@@ -103,9 +103,10 @@ class BatchConverter(QThread):
         self.acoustid_only = acoustid_only
         # Never rewrite an existing musicbrainz_trackid on a check-only run:
         # "Check AcoustID Only" promises tagged data stays untouched, so
-        # this is ignored there. Filling in a *missing* release-type tag is
-        # purely additive (never overwrites anything) and safe to allow on
-        # both check-only buttons - see acoustid_fill_release_type below.
+        # this is ignored there. Filling in *missing* release-type/date/
+        # originaldate tags is purely additive (never overwrites anything)
+        # and safe to allow on both check-only buttons - see
+        # acoustid_fill_release_type below.
         self.acoustid_autocorrect = acoustid_autocorrect and not acoustid_only
         self.acoustid_fill_release_type = acoustid_autocorrect
         self._cancel_event = threading.Event()
@@ -119,6 +120,8 @@ class BatchConverter(QThread):
             core.correct_acoustid_mismatch(path, result)
         if self.acoustid_fill_release_type and core.apply_release_type(path, result):
             log.write(f"AcoustID: {path}: filled missing release type '{result.release_type}'\n")
+        if self.acoustid_fill_release_type and core.apply_release_provenance(path, result):
+            log.write(f"AcoustID: {path}: filled missing date/originaldate ({result.date}/{result.originaldate})\n")
         log.write(f"AcoustID [{result.status}]: {path}: {result.detail}\n")
         self.acoustid_checked.emit(index, result.status, result.detail, result.corrected)
         return result
@@ -377,10 +380,11 @@ class LidarrSettingsDialog(QDialog):
 
 
 class LibraryStatsWorker(QThread):
-    """Runs library_stats.scan_release_types() off the UI thread, since
-    walking and tag-reading a whole library can take a while."""
+    """Runs library_stats.scan_release_types()/scan_release_provenance() off
+    the UI thread, since walking and tag-reading a whole library can take a
+    while."""
 
-    scan_finished = Signal(object)  # Counter[str]
+    scan_finished = Signal(object, object)  # Counter[str] (types), Counter[str] (provenance)
     scan_error = Signal(str)
 
     def __init__(self, folder: Path) -> None:
@@ -389,63 +393,80 @@ class LibraryStatsWorker(QThread):
 
     def run(self) -> None:
         try:
-            counts = library_stats.scan_release_types(self.folder)
+            types = library_stats.scan_release_types(self.folder)
+            provenance = library_stats.scan_release_provenance(self.folder)
         except Exception as exc:  # noqa: BLE001 - report to the UI, don't die silently
             self.scan_error.emit(str(exc))
             return
-        self.scan_finished.emit(counts)
+        self.scan_finished.emit(types, provenance)
+
+
+def _build_bar_chart(counts: Counter[str], title: str) -> QChartView:
+    """One horizontal bar chart, most common category first - reads better
+    than a pie chart once there are more than a handful of categories,
+    since exact magnitudes and a long tail of small categories are both
+    easy to read off a shared axis."""
+    ordered = counts.most_common()  # descending by count
+
+    bar_set = QBarSet("Releases")
+    bar_set.append([count for _, count in ordered])
+
+    series = QHorizontalBarSeries()
+    series.append(bar_set)
+    series.setLabelsVisible(True)
+
+    chart = QChart()
+    chart.addSeries(series)
+    chart.setTitle(title)
+    chart.legend().setVisible(False)
+
+    axis_y = QBarCategoryAxis()
+    axis_y.append([f"{label} ({count})" for label, count in ordered])
+    chart.addAxis(axis_y, Qt.AlignLeft)
+    series.attachAxis(axis_y)
+
+    axis_x = QValueAxis()
+    axis_x.setLabelFormat("%d")
+    axis_x.setRange(0, ordered[0][1])
+    chart.addAxis(axis_x, Qt.AlignBottom)
+    series.attachAxis(axis_x)
+
+    chart_view = QChartView(chart)
+    chart_view.setRenderHint(QPainter.Antialiasing)
+    return chart_view
 
 
 class LibraryStatsWindow(QDialog):
-    """Standalone, non-modal window showing a horizontal bar chart of
-    release-type counts (Album, EP, Single, Compilation, ...), most
-    common first - reads better than a pie chart once there are more
-    than a handful of categories, since exact magnitudes and a long tail
-    of small categories are both easy to read off a shared axis."""
+    """Standalone, non-modal window showing horizontal bar charts of
+    release-type counts (Album, EP, Single, Compilation, ...) and release
+    provenance (Original, Reissue, Compilation, Unknown), each most common
+    first."""
 
-    def __init__(self, counts: Counter[str], folder: Path, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        type_counts: Counter[str],
+        provenance_counts: Counter[str],
+        folder: Path,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Collection Summary")
-        self.resize(720, 480)
+        self.resize(720, 800)
 
         layout = QVBoxLayout(self)
-        total = sum(counts.values())
+        total = sum(type_counts.values())
         header = QLabel(f"<b>{total}</b> release(s) found under {folder}")
         header.setWordWrap(True)
         layout.addWidget(header)
 
-        if not counts:
+        if not type_counts:
             layout.addWidget(QLabel("No albums/EPs/singles with readable audio files were found."))
             return
 
-        ordered = counts.most_common()  # descending by count
-
-        bar_set = QBarSet("Releases")
-        bar_set.append([count for _, count in ordered])
-
-        series = QHorizontalBarSeries()
-        series.append(bar_set)
-        series.setLabelsVisible(True)
-
-        chart = QChart()
-        chart.addSeries(series)
-        chart.setTitle("Release types, most common first")
-        chart.legend().setVisible(False)
-
-        axis_y = QBarCategoryAxis()
-        axis_y.append([f"{label} ({count})" for label, count in ordered])
-        chart.addAxis(axis_y, Qt.AlignLeft)
-        series.attachAxis(axis_y)
-
-        axis_x = QValueAxis()
-        axis_x.setLabelFormat("%d")
-        axis_x.setRange(0, ordered[0][1])
-        chart.addAxis(axis_x, Qt.AlignBottom)
-        series.attachAxis(axis_x)
-
-        chart_view = QChartView(chart)
-        chart_view.setRenderHint(QPainter.Antialiasing)
-        layout.addWidget(chart_view)
+        layout.addWidget(_build_bar_chart(type_counts, "Release types, most common first"))
+        layout.addWidget(
+            _build_bar_chart(provenance_counts, "Original vs. reissue vs. compilation, most common first")
+        )
 
 
 class MainWindow(QMainWindow):
@@ -774,12 +795,12 @@ class MainWindow(QMainWindow):
         self.library_stats_worker.scan_error.connect(self._on_library_stats_error)
         self.library_stats_worker.start()
 
-    def _on_library_stats_finished(self, counts: Counter[str]) -> None:
+    def _on_library_stats_finished(self, type_counts: Counter[str], provenance_counts: Counter[str]) -> None:
         self.library_stats_button.setEnabled(True)
-        total = sum(counts.values())
+        total = sum(type_counts.values())
         self.status_label.setText(f"Collection summary: {total} release(s)")
         folder = Path(self.folder_edit.text())
-        self.library_stats_window = LibraryStatsWindow(counts, folder, self)
+        self.library_stats_window = LibraryStatsWindow(type_counts, provenance_counts, folder, self)
         self.library_stats_window.show()
 
     def _on_library_stats_error(self, message: str) -> None:

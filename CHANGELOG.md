@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Collection Summary now also shows a second chart classifying each release
+  as Original, Reissue, or Compilation, using the `releasetype`
+  compilation secondary type and a `date`/`originaldate` mismatch
+  (`library_stats.scan_release_provenance`).
+- AcoustID check/fill can now tag `date`/`originaldate` itself, no Picard
+  required: `check_acoustid` queries MusicBrainz's web service directly
+  (no API key needed) off the matched recording's MBID for the release's
+  own date and its release-group's original release date, and "Fill
+  release type" now also backfills these via the new
+  `apply_release_provenance` (`core.py`).
+
 ## [0.6]
 
 ### Added

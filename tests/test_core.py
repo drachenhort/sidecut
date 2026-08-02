@@ -343,8 +343,15 @@ def _fake_acoustid_get(recordings_data: dict, releasegroups_data: dict):
     # The real AcoustID API only honors one `meta` mode per request, so
     # check_acoustid makes two separate calls (one meta=recordings, one
     # meta=releasegroups) - this stub routes each to its own canned
-    # response the same way, based on the `meta` query param.
-    def fake_get(url, params=None, timeout=None):
+    # response the same way, based on the `meta` query param. check_acoustid
+    # also always makes a third call direct to MusicBrainz for provenance;
+    # tests that don't care about that just get an empty releases list back.
+    def fake_get(url, params=None, timeout=None, headers=None):
+        if "musicbrainz.org" in url:
+            response = Mock()
+            response.json.return_value = {"releases": []}
+            response.raise_for_status = Mock()
+            return response
         data = releasegroups_data if params.get("meta") == "releasegroups" else recordings_data
         response = Mock()
         response.json.return_value = data
@@ -450,6 +457,195 @@ def test_check_acoustid_release_type_none_without_releasegroups(tmp_path: Path) 
         result = core.check_acoustid(src, "fake-api-key")
 
     assert result.release_type is None
+
+
+def _fake_full_lookup_get(recordings_data: dict, releasegroups_data: dict, musicbrainz_data: dict):
+    # Same one-mode-per-request quirk as _fake_acoustid_get, plus a third
+    # canned response for the direct MusicBrainz recording lookup
+    # (_musicbrainz_lookup_recording), routed by hostname since that call
+    # has no `meta` param.
+    def fake_get(url, params=None, timeout=None, headers=None):
+        if "musicbrainz.org" in url:
+            data = musicbrainz_data
+        else:
+            data = releasegroups_data if params.get("meta") == "releasegroups" else recordings_data
+        response = Mock()
+        response.json.return_value = data
+        response.raise_for_status = Mock()
+        return response
+
+    return fake_get
+
+
+def test_check_acoustid_surfaces_date_and_originaldate_from_musicbrainz(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src)
+    recordings_data = {
+        "status": "ok",
+        "results": [{"id": "acoustid-1", "score": 0.9, "recordings": [{"id": "mb-track-1", "title": "Song"}]}],
+    }
+    releasegroups_data = {"status": "ok", "results": [{"id": "acoustid-1", "score": 0.9}]}
+    musicbrainz_data = {
+        "releases": [
+            {
+                "title": "Iron Man 2",
+                "date": "2011-06-01",
+                "release-group": {
+                    "primary-type": "Album",
+                    "secondary-types": ["Compilation"],
+                    "first-release-date": "1980-07-25",
+                },
+            }
+        ]
+    }
+
+    with patch("subprocess.run", side_effect=_fake_fpcalc_run), patch(
+        "requests.get", side_effect=_fake_full_lookup_get(recordings_data, releasegroups_data, musicbrainz_data)
+    ):
+        result = core.check_acoustid(src, "fake-api-key")
+
+    assert result.date == "2011-06-01"
+    assert result.originaldate == "1980-07-25"
+    # MusicBrainz's own type/secondary-types back-fill release_type when
+    # AcoustID's releasegroups meta didn't have one.
+    assert result.release_type == "compilation"
+
+
+def test_check_acoustid_prefers_musicbrainz_release_matching_tagged_album(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src, album="Greatest Hits")
+    recordings_data = {
+        "status": "ok",
+        "results": [{"id": "acoustid-1", "score": 0.9, "recordings": [{"id": "mb-track-1", "title": "Song"}]}],
+    }
+    releasegroups_data = {"status": "ok", "results": [{"id": "acoustid-1", "score": 0.9}]}
+    musicbrainz_data = {
+        "releases": [
+            {
+                "title": "Original Album",
+                "date": "1980-01-01",
+                "release-group": {"primary-type": "Album", "first-release-date": "1980-01-01"},
+            },
+            {
+                "title": "Greatest Hits",
+                "date": "1999-01-01",
+                "release-group": {
+                    "primary-type": "Album",
+                    "secondary-types": ["Compilation"],
+                    "first-release-date": "1999-01-01",
+                },
+            },
+        ]
+    }
+
+    with patch("subprocess.run", side_effect=_fake_fpcalc_run), patch(
+        "requests.get", side_effect=_fake_full_lookup_get(recordings_data, releasegroups_data, musicbrainz_data)
+    ):
+        result = core.check_acoustid(src, "fake-api-key")
+
+    assert result.date == "1999-01-01"
+    assert result.release_type == "compilation"
+
+
+def test_check_acoustid_provenance_none_when_musicbrainz_lookup_fails(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src)
+    recordings_data = {
+        "status": "ok",
+        "results": [{"id": "acoustid-1", "score": 0.9, "recordings": [{"id": "mb-track-1", "title": "Song"}]}],
+    }
+    releasegroups_data = {"status": "ok", "results": [{"id": "acoustid-1", "score": 0.9}]}
+
+    def fake_get(url, params=None, timeout=None, headers=None):
+        if "musicbrainz.org" in url:
+            raise requests.ConnectionError("boom")
+        data = releasegroups_data if params.get("meta") == "releasegroups" else recordings_data
+        response = Mock()
+        response.json.return_value = data
+        return response
+
+    with patch("subprocess.run", side_effect=_fake_fpcalc_run), patch("requests.get", side_effect=fake_get):
+        result = core.check_acoustid(src, "fake-api-key")
+
+    assert result.status == "identified"
+    assert result.date is None
+    assert result.originaldate is None
+
+
+def test_apply_release_provenance_writes_missing_tags(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src)
+    result = core.AcoustIDCheck("identified", "detail", "mb-track-1", 0.9, date="2011-06-01", originaldate="1980-07-25")
+
+    applied = core.apply_release_provenance(src, result)
+
+    assert applied is True
+    assert FLAC(src)["date"] == ["2011-06-01"]
+    assert FLAC(src)["originaldate"] == ["1980-07-25"]
+
+
+def test_apply_release_provenance_never_overwrites_existing_tags(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src, date="1980-07-25", originaldate="1980-07-25")
+    result = core.AcoustIDCheck("identified", "detail", "mb-track-1", 0.9, date="2011-06-01", originaldate="1999-01-01")
+
+    applied = core.apply_release_provenance(src, result)
+
+    assert applied is False
+    assert FLAC(src)["date"] == ["1980-07-25"]
+    assert FLAC(src)["originaldate"] == ["1980-07-25"]
+
+
+def test_apply_release_provenance_fills_only_the_missing_field(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src, date="1980-07-25")  # originaldate missing
+    result = core.AcoustIDCheck("identified", "detail", "mb-track-1", 0.9, date="2011-06-01", originaldate="1999-01-01")
+
+    applied = core.apply_release_provenance(src, result)
+
+    assert applied is True
+    assert FLAC(src)["date"] == ["1980-07-25"]  # untouched
+    assert FLAC(src)["originaldate"] == ["1999-01-01"]  # filled in
+
+
+def test_apply_release_provenance_skips_when_no_provenance(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src)
+    result = core.AcoustIDCheck("no_match", "detail")
+
+    assert core.apply_release_provenance(src, result) is False
+
+
+def test_apply_release_provenance_writes_missing_tags_on_mp3(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src, artist="Artist", title="Song")
+    with open("/dev/null", "w") as log:
+        assert core.convert_one(src, core.QUALITY_PRESETS["v0"], log).ok
+    mp3 = tmp_path / "song.mp3"
+    result = core.AcoustIDCheck("identified", "detail", "mb-track-1", 0.9, date="2011-06-01", originaldate="1980-07-25")
+
+    applied = core.apply_release_provenance(mp3, result)
+
+    assert applied is True
+    id3 = ID3(mp3)
+    assert str(id3["TDRC"].text[0]) == "2011-06-01"
+    assert str(id3["TDOR"].text[0]) == "1980-07-25"
+
+
+def test_apply_release_provenance_never_overwrites_existing_tags_on_mp3(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src, artist="Artist", title="Song", date="1980-07-25")
+    with open("/dev/null", "w") as log:
+        assert core.convert_one(src, core.QUALITY_PRESETS["v0"], log).ok
+    mp3 = tmp_path / "song.mp3"
+    result = core.AcoustIDCheck("identified", "detail", "mb-track-1", 0.9, date="2011-06-01", originaldate="1999-01-01")
+
+    applied = core.apply_release_provenance(mp3, result)
+
+    assert applied is True  # originaldate still gets filled in
+    id3 = ID3(mp3)
+    assert str(id3["TDRC"].text[0]) == "1980-07-25"  # untouched
+    assert str(id3["TDOR"].text[0]) == "1999-01-01"  # filled in
 
 
 def test_apply_release_type_writes_missing_tag(tmp_path: Path) -> None:

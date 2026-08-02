@@ -3,6 +3,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from mutagen.flac import FLAC
 from mutagen.id3 import ID3
 
 import core
@@ -74,5 +75,68 @@ def test_scan_release_types_ignores_unreadable_file_without_crashing(tmp_path: P
     (album / "01.flac").write_text("not a real flac file")
 
     counts = library_stats.scan_release_types(tmp_path)
+
+    assert counts == {"Unknown": 1}
+
+
+@pytest.mark.parametrize(
+    "release_types,date,originaldate,expected",
+    [
+        (["album", "compilation"], "1999-01-01", "1999-01-01", "Compilation"),
+        (["album"], "2011-06-01", "1980-03-01", "Reissue"),
+        (["album"], "1980-03-01", "1980-03-01", "Original"),
+        (["album"], None, None, "Original"),
+        ([], None, None, "Unknown"),
+    ],
+)
+def test_classify_provenance(
+    release_types: list[str], date: str | None, originaldate: str | None, expected: str
+) -> None:
+    assert library_stats.classify_provenance(release_types, date, originaldate) == expected
+
+
+def test_scan_release_provenance_detects_reissue_from_date_mismatch(tmp_path: Path) -> None:
+    album = tmp_path / "Artist" / "Reissued Album (2011)"
+    album.mkdir(parents=True)
+    make_flac(album / "01.flac", releasetype="album", date="2011-06-01", originaldate="1980-03-01")
+
+    counts = library_stats.scan_release_provenance(tmp_path)
+
+    assert counts == {"Reissue": 1}
+
+
+def test_scan_release_provenance_detects_compilation_from_secondary_type(tmp_path: Path) -> None:
+    album = tmp_path / "Artist" / "Greatest Hits (1999)"
+    album.mkdir(parents=True)
+    path = album / "01.flac"
+    make_flac(path, date="1999-01-01")
+    # Picard writes primary + secondary release types as repeated Vorbis
+    # comment fields sharing the "releasetype" key - ffmpeg's -metadata
+    # flag can't express that, so append the second value directly.
+    flac = FLAC(path)
+    flac["releasetype"] = ["album", "compilation"]
+    flac.save()
+
+    counts = library_stats.scan_release_provenance(tmp_path)
+
+    assert counts == {"Compilation": 1}
+
+
+def test_scan_release_provenance_labels_matching_dates_as_original(tmp_path: Path) -> None:
+    album = tmp_path / "Artist" / "Debut (1980)"
+    album.mkdir(parents=True)
+    make_flac(album / "01.flac", releasetype="album", date="1980-03-01", originaldate="1980-03-01")
+
+    counts = library_stats.scan_release_provenance(tmp_path)
+
+    assert counts == {"Original": 1}
+
+
+def test_scan_release_provenance_labels_untagged_release_as_unknown(tmp_path: Path) -> None:
+    album = tmp_path / "Artist" / "Untagged (2019)"
+    album.mkdir(parents=True)
+    make_flac(album / "01.flac")  # no releasetype/date tags at all
+
+    counts = library_stats.scan_release_provenance(tmp_path)
 
     assert counts == {"Unknown": 1}

@@ -155,6 +155,16 @@ ACOUSTID_LOOKUP_URL = "https://api.acoustid.org/v2/lookup"
 ACOUSTID_RATE_LIMIT_PER_SECOND = 4.0
 ACOUSTID_AUTOCORRECT_MIN_SCORE = 0.5
 
+# MusicBrainz's own web service, queried directly (no API key needed) for
+# release/release-group data AcoustID's meta modes don't expose: a
+# release's own date and its release-group's original (first) release
+# date - what apply_release_provenance needs to tell an original pressing
+# from a reissue. See https://musicbrainz.org/doc/MusicBrainz_API/Rate_Limiting
+# for the 1 req/sec courtesy limit and User-Agent requirement.
+MUSICBRAINZ_API_URL = "https://musicbrainz.org/ws/2"
+MUSICBRAINZ_RATE_LIMIT_PER_SECOND = 1.0
+MUSICBRAINZ_USER_AGENT = "flac2mp3/1.0 (+https://github.com/drachenhort/flac2mp3)"
+
 
 class _RateLimiter:
     """Caps calls to at most `per_second`, blocking the calling thread as
@@ -175,6 +185,7 @@ class _RateLimiter:
 
 
 _acoustid_rate_limiter = _RateLimiter(ACOUSTID_RATE_LIMIT_PER_SECOND)
+_musicbrainz_rate_limiter = _RateLimiter(MUSICBRAINZ_RATE_LIMIT_PER_SECOND)
 
 
 @dataclass
@@ -189,6 +200,8 @@ class AcoustIDCheck:
     score: float | None = None
     corrected: bool = False
     release_type: str | None = None
+    date: str | None = None
+    originaldate: str | None = None
 
 
 @dataclass
@@ -354,6 +367,70 @@ def _lookup_release_type(
     return None
 
 
+def _musicbrainz_lookup_recording(recording_id: str) -> dict:
+    """Query MusicBrainz directly for every release (and its release-group)
+    a recording appears on - richer than AcoustID's own `releasegroups`
+    meta, which exposes type/secondarytypes but no dates. Needs no API
+    key: MusicBrainz's web service is open, just rate-limited."""
+    _musicbrainz_rate_limiter.wait()
+    response = requests.get(
+        f"{MUSICBRAINZ_API_URL}/recording/{recording_id}",
+        params={"inc": "releases+release-groups", "fmt": "json"},
+        headers={"User-Agent": MUSICBRAINZ_USER_AGENT},
+        timeout=15,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def _pick_release_provenance(
+    releases: list[dict], tagged_album: str = ""
+) -> tuple[str | None, str | None, str | None]:
+    """Pick one release off a recording's MusicBrainz `releases` list (see
+    _musicbrainz_lookup_recording) and return (release_type, date,
+    originaldate): `date` is that release's own release date;
+    `originaldate` is its release-group's first-release-date - the
+    release-group's original release, regardless of which specific
+    pressing this recording came from; `release_type` is "compilation" if
+    the release-group carries that secondary type, else its primary type.
+    Mirrors _pick_release_type's matching logic: prefer the release whose
+    title matches this file's existing `album` tag, otherwise fall back to
+    the first release MusicBrainz returns."""
+
+    def extract(release: dict) -> tuple[str | None, str | None, str | None]:
+        group = release.get("release-group") or {}
+        if "Compilation" in (group.get("secondary-types") or []):
+            release_type = "compilation"
+        else:
+            primary_type = group.get("primary-type")
+            release_type = primary_type.lower() if primary_type else None
+        return release_type, release.get("date") or None, group.get("first-release-date") or None
+
+    if tagged_album:
+        for release in releases:
+            if release.get("title", "").strip().casefold() == tagged_album.strip().casefold():
+                return extract(release)
+    if releases:
+        return extract(releases[0])
+    return None, None, None
+
+
+def _lookup_release_provenance(
+    recording_id: str | None, tagged_album: str = ""
+) -> tuple[str | None, str | None, str | None]:
+    """Query MusicBrainz for the release type, this release's date, and
+    its release-group's original release date, keyed off a MusicBrainz
+    recording ID (e.g. AcoustIDCheck.recording_id). Never raises: any
+    failure just means no provenance data, not a failed check."""
+    if not recording_id:
+        return None, None, None
+    try:
+        data = _musicbrainz_lookup_recording(recording_id)
+    except requests.RequestException:
+        return None, None, None
+    return _pick_release_provenance(data.get("releases") or [], tagged_album)
+
+
 _ALBUM_TYPE_DESC = "MusicBrainz Album Type"
 
 
@@ -384,6 +461,43 @@ def apply_release_type(path: Path, result: AcoustIDCheck) -> bool:
         id3.add(TXXX(encoding=3, desc=_ALBUM_TYPE_DESC, text=result.release_type))
         id3.save(path, v2_version=3)
         return True
+    return False
+
+
+def apply_release_provenance(path: Path, result: AcoustIDCheck) -> bool:
+    """If `result` carries a date and/or originaldate from MusicBrainz and
+    `path` is missing either tag, write it: the "date"/"originaldate"
+    Vorbis comments on a FLAC, or the equivalent TDRC/TDOR ID3 frames on
+    an already-converted MP3. This is what
+    library_stats.scan_release_provenance reads to tell an original
+    release from a reissue. Each field is filled independently and never
+    overwrites an existing value, mirroring apply_release_type. Returns
+    whether anything was written."""
+    suffix = path.suffix.lower()
+    if suffix == ".flac":
+        tags = FLAC(path)
+        wrote = False
+        if result.date and not tags.get("date"):
+            tags["date"] = [result.date]
+            wrote = True
+        if result.originaldate and not tags.get("originaldate"):
+            tags["originaldate"] = [result.originaldate]
+            wrote = True
+        if wrote:
+            tags.save()
+        return wrote
+    if suffix == ".mp3":
+        id3 = ID3(path)
+        wrote = False
+        if result.date and not (id3.get("TDRC") and id3["TDRC"].text):
+            id3.add(TDRC(encoding=3, text=result.date))
+            wrote = True
+        if result.originaldate and not (id3.get("TDOR") and id3["TDOR"].text):
+            id3.add(TDOR(encoding=3, text=result.originaldate))
+            wrote = True
+        if wrote:
+            id3.save(path, v2_version=3)
+        return wrote
     return False
 
 
@@ -430,11 +544,14 @@ def check_acoustid(path: Path, api_key: str) -> AcoustIDCheck:
     release_type = _lookup_release_type(api_key, duration, fingerprint, best.get("id"), tagged_album)
 
     best_id = recording_ids[0] if recording_ids else None
+    mb_release_type, mb_date, mb_originaldate = _lookup_release_provenance(best_id, tagged_album)
+    release_type = release_type or mb_release_type
+
     if existing_id:
         if existing_id in recording_ids:
             return AcoustIDCheck(
                 "match", f"Matches tagged recording (score {score:.2f})", existing_id, score,
-                release_type=release_type,
+                release_type=release_type, date=mb_date, originaldate=mb_originaldate,
             )
         tagged = f"{tagged_artist} - {tagged_title}".strip(" -") or existing_id
         if summary:
@@ -447,12 +564,18 @@ def check_acoustid(path: Path, api_key: str) -> AcoustIDCheck:
                 f"Tagged as '{tagged}' (MBID {existing_id}), but AcoustID's match "
                 f"(score {score:.2f}) has no linked MusicBrainz recording to compare against"
             )
-        return AcoustIDCheck("mismatch", detail, best_id, score, release_type=release_type)
+        return AcoustIDCheck(
+            "mismatch", detail, best_id, score, release_type=release_type, date=mb_date, originaldate=mb_originaldate,
+        )
     if summary:
         detail = f"AcoustID suggests '{summary}' (MBID {best_id}, score {score:.2f})"
-        return AcoustIDCheck("identified", detail, best_id, score, release_type=release_type)
+        return AcoustIDCheck(
+            "identified", detail, best_id, score, release_type=release_type, date=mb_date, originaldate=mb_originaldate,
+        )
     detail = f"AcoustID match found but has no linked MusicBrainz recording (score {score:.2f})"
-    return AcoustIDCheck("identified", detail, None, score, release_type=release_type)
+    return AcoustIDCheck(
+        "identified", detail, None, score, release_type=release_type, date=mb_date, originaldate=mb_originaldate,
+    )
 
 
 def correct_acoustid_mismatch(path: Path, result: AcoustIDCheck, min_score: float = ACOUSTID_AUTOCORRECT_MIN_SCORE) -> bool:
