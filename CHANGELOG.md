@@ -48,6 +48,11 @@ All notable changes to this project are documented in this file.
   "Compilations" moves instead of relocating the whole album folder.
   `library_stats._iter_releases` now collapses a directory whose
   immediate subfolders are all disc-named into one release.
+- `run_ffmpeg` could hang forever converting a file whose ffmpeg run
+  produces enough stderr output to fill the OS pipe buffer: only stdout
+  (the `-progress` stream) was being read while the conversion ran, so
+  ffmpeg would block writing stderr and never produce more progress
+  either. stderr is now drained concurrently on its own thread.
 
 ## [0.6]
 

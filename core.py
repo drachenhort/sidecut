@@ -680,6 +680,16 @@ def run_ffmpeg(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
     )
     assert proc.stdout is not None
+    assert proc.stderr is not None
+    # Drain stderr on its own thread: ffmpeg writes progress key=value lines
+    # to stdout and error/warning text to stderr, and reading only stdout
+    # here would deadlock if stderr fills its OS pipe buffer before ffmpeg
+    # exits (ffmpeg blocks writing it, so it never produces more stdout
+    # either, and the loop below waits forever).
+    stderr_chunks: list[str] = []
+    stderr_thread = threading.Thread(target=lambda: stderr_chunks.extend(proc.stderr))
+    stderr_thread.start()
+
     progress = Progress()
     for line in proc.stdout:
         if should_cancel is not None and should_cancel():
@@ -688,10 +698,10 @@ def run_ffmpeg(
         _apply_progress_line(progress, line.strip(), total_duration)
         if on_progress is not None:
             on_progress(progress)
-    stderr = proc.stderr.read() if proc.stderr else ""
+    stderr_thread.join()
     proc.wait()
-    if stderr:
-        log.write(stderr)
+    if stderr_chunks:
+        log.write("".join(stderr_chunks))
     return proc.returncode == 0
 
 
