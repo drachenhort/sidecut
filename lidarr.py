@@ -447,6 +447,24 @@ def get_artist_trackfiles(base_url: str, api_key: str, artist_id: int) -> list[d
     return response.json()
 
 
+def get_queue(base_url: str, api_key: str) -> list[dict[str, Any]]:
+    """List Lidarr's current download queue (GET /api/v1/queue) - what
+    Lidarr is currently downloading/importing, from any source. Independent
+    of commands this tool queues itself (see submit_manual_import etc)."""
+    try:
+        response = _with_retry(
+            requests.get,
+            _url(base_url, "/api/v1/queue"),
+            headers=_headers(api_key),
+            params={"pageSize": 200, "includeAlbum": True, "includeArtist": True},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise LidarrError(f"Failed to fetch the Lidarr queue: {exc}") from exc
+    return response.json()["records"]
+
+
 def delete_trackfile(base_url: str, api_key: str, trackfile_id: int) -> None:
     """DELETEs the file on disk, not just the database record - Lidarr
     treats removing a TrackFile as "delete this file". Never call this for

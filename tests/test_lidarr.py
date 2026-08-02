@@ -568,6 +568,24 @@ def test_get_album_trackfiles_passes_album_id() -> None:
     assert get.call_args.kwargs["params"] == {"albumId": 5}
 
 
+def test_get_queue_returns_records() -> None:
+    response = Mock()
+    response.json.return_value = {"records": [{"id": 1, "title": "Some Album"}], "totalRecords": 1}
+
+    with patch("requests.get", return_value=response) as get:
+        queue = lidarr.get_queue("http://localhost:8686", "key")
+
+    assert queue == [{"id": 1, "title": "Some Album"}]
+    assert get.call_args.kwargs["params"] == {"pageSize": 200, "includeAlbum": True, "includeArtist": True}
+    assert get.call_args.kwargs["headers"] == {"X-Api-Key": "key"}
+
+
+def test_get_queue_raises_on_request_failure() -> None:
+    with patch("requests.get", side_effect=requests.ConnectionError("no route")), patch("time.sleep"):
+        with pytest.raises(lidarr.LidarrError, match="Failed to fetch the Lidarr queue"):
+            lidarr.get_queue("http://localhost:8686", "key")
+
+
 def test_lidarr_path_to_local_rewrites_matching_prefix() -> None:
     result = lidarr.lidarr_path_to_local("/music/Artist/song.mp3", "/home/user/Music", "/music")
     assert result == Path("/home/user/Music/Artist/song.mp3")
