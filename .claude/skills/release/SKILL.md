@@ -17,3 +17,9 @@ To cut a release:
 4. Tag: `git tag -a acoustid-vX.Y -m "..."` (annotated, message summarizes the
    version's changes) and push both the commit and the tag
    (`git push && git push origin acoustid-vX.Y`).
+5. Create the GitHub release from that same CHANGELOG section - don't
+   hand-write separate release notes, the changelog entry already is them:
+   ```bash
+   .claude/skills/release/extract-changelog-section.sh X.Y > /tmp/release-notes-X.Y.md
+   gh release create acoustid-vX.Y --title "AcoustID vX.Y" --notes-file /tmp/release-notes-X.Y.md
+   ```
