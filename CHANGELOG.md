@@ -15,6 +15,17 @@ All notable changes to this project are documented in this file.
   own date and its release-group's original release date, and "Fill
   release type" now also backfills these via the new
   `apply_release_provenance` (`core.py`).
+- New **Sort Reissues/Compilations...** button: scans the chosen folder
+  (read-only) for releases classified as reissues or compilations and
+  previews moving each into a "Reissues"/"Compilations" subfolder of its
+  own artist folder (e.g. "Simple Minds/Album (1998 Remaster)" -> "Simple
+  Minds/Reissues/Album (1998 Remaster)", "Simple Minds/Greatest Hits" ->
+  "Simple Minds/Compilations/Greatest Hits") - keeps an artist folder down
+  to its original studio albums, with every remaster and best-of/comp
+  release tucked out of the way instead. Each release has a per-row "Sort
+  into .../Keep as it is" toggle, and nothing moves until the list is
+  reviewed and confirmed (`library_stats.plan_declutter_moves`/
+  `execute_declutter_moves`).
 
 ## [0.6]
 

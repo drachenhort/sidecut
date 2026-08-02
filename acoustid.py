@@ -469,6 +469,144 @@ class LibraryStatsWindow(QDialog):
         )
 
 
+class DeclutterScanWorker(QThread):
+    """Runs library_stats.plan_declutter_moves() off the UI thread, since
+    walking and tag-reading a whole library can take a while. Read-only -
+    nothing moves until DeclutterSortDialog's Move button runs
+    DeclutterMoveWorker."""
+
+    scan_finished = Signal(object)  # list[library_stats.DeclutterMove]
+    scan_error = Signal(str)
+
+    def __init__(self, folder: Path) -> None:
+        super().__init__()
+        self.folder = folder
+
+    def run(self) -> None:
+        try:
+            moves = library_stats.plan_declutter_moves(self.folder)
+        except Exception as exc:  # noqa: BLE001 - report to the UI, don't die silently
+            self.scan_error.emit(str(exc))
+            return
+        self.scan_finished.emit(moves)
+
+
+class DeclutterMoveWorker(QThread):
+    """Runs library_stats.execute_declutter_moves() off the UI thread, since
+    moving many release folders (especially across network storage, e.g.
+    an Unraid share) can take a while."""
+
+    move_finished = Signal(object)  # list[library_stats.DeclutterMove], mutated with .error set
+
+    def __init__(self, moves: list[library_stats.DeclutterMove]) -> None:
+        super().__init__()
+        self.moves = moves
+
+    def run(self) -> None:
+        library_stats.execute_declutter_moves(self.moves)
+        self.move_finished.emit(self.moves)
+
+
+KEEP_LABEL = "Keep as it is"
+
+
+class DeclutterSortDialog(QDialog):
+    """Preview-then-confirm window for moving Reissue and Compilation
+    releases into a "Reissues"/"Compilations" subfolder of their own
+    artist folder (e.g. "Simple Minds/Album (1998 Remaster)" -> "Simple
+    Minds/Reissues/Album (1998 Remaster)", "Simple Minds/Greatest Hits" ->
+    "Simple Minds/Compilations/Greatest Hits") - keeps an artist folder
+    down to its original studio albums, with every remaster and
+    best-of/comp release (which tend to badly overlap in tracklist) tucked
+    out of the way instead. Moving files is hard to reverse, so nothing
+    happens until the user reviews the list and clicks Move - each row
+    also gets a per-release toggle to exclude false positives from
+    classify_provenance without leaving the dialog."""
+
+    def __init__(self, moves: list[library_stats.DeclutterMove], folder: Path, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.moves = moves
+        self.folder = folder
+        self.setWindowTitle("Sort Reissues/Compilations")
+        self.resize(760, 480)
+        self.setModal(False)
+
+        layout = QVBoxLayout(self)
+        header = QLabel(f"<b>{len(moves)}</b> reissue(s)/compilation(s) found under {folder}")
+        header.setWordWrap(True)
+        layout.addWidget(header)
+
+        if not moves:
+            layout.addWidget(QLabel("No releases classified as reissues or compilations were found."))
+            buttons = QDialogButtonBox(QDialogButtonBox.Close)
+            buttons.rejected.connect(self.close)
+            buttons.button(QDialogButtonBox.Close).clicked.connect(self.close)
+            layout.addWidget(buttons)
+            return
+
+        self.table = QTableWidget(len(moves), 3)
+        self.table.setHorizontalHeaderLabels(["Release", "Moves to", "Action"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.combo_boxes: list[QComboBox] = []
+        for row, move in enumerate(moves):
+            self.table.setItem(row, 0, QTableWidgetItem(str(move.source.relative_to(folder))))
+            self.table.setItem(row, 1, QTableWidgetItem(str(move.destination.relative_to(folder))))
+            combo = QComboBox()
+            # move.destination.parent.name is "Reissues" or "Compilations" -
+            # naming the actual destination folder here beats a generic
+            # "Sort" label, since both categories share this one dialog.
+            combo.addItems([f"Sort into {move.destination.parent.name}", KEEP_LABEL])
+            self.table.setCellWidget(row, 2, combo)
+            self.combo_boxes.append(combo)
+        layout.addWidget(self.table)
+
+        self.status_label = QLabel("")
+        layout.addWidget(self.status_label)
+
+        button_row = QHBoxLayout()
+        self.move_button = QPushButton(f"Move {len(moves)} Release(s)")
+        self.move_button.clicked.connect(self._start_move)
+        button_row.addWidget(self.move_button)
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(self.close)
+        button_row.addWidget(close_button)
+        layout.addLayout(button_row)
+
+        self.move_worker: DeclutterMoveWorker | None = None
+
+    def _start_move(self) -> None:
+        for move, combo in zip(self.moves, self.combo_boxes):
+            move.selected = combo.currentText() != KEEP_LABEL
+        selected_count = sum(1 for move in self.moves if move.selected)
+        if not selected_count:
+            self.status_label.setText("Nothing selected to move.")
+            return
+        self.move_button.setEnabled(False)
+        self.table.setEnabled(False)
+        self.status_label.setText(f"Moving {selected_count} release(s)...")
+
+        self.move_worker = DeclutterMoveWorker(self.moves)
+        self.move_worker.move_finished.connect(self._on_move_finished)
+        self.move_worker.start()
+
+    def _on_move_finished(self, moves: list[library_stats.DeclutterMove]) -> None:
+        ok_count = 0
+        fail_count = 0
+        for row, move in enumerate(moves):
+            self.table.removeCellWidget(row, 2)
+            if not move.selected:
+                self.table.setItem(row, 2, QTableWidgetItem(KEEP_LABEL))
+            elif move.error is None:
+                self.table.setItem(row, 2, QTableWidgetItem("Moved"))
+                ok_count += 1
+            else:
+                self.table.setItem(row, 2, QTableWidgetItem(f"Failed: {move.error}"))
+                fail_count += 1
+        self.status_label.setText(f"Moved: {ok_count}  Failed: {fail_count}  Kept: {len(moves) - ok_count - fail_count}")
+
+
 class MainWindow(QMainWindow):
     def __init__(self, initial_folder: Path | None = None) -> None:
         super().__init__()
@@ -481,6 +619,8 @@ class MainWindow(QMainWindow):
         self.lidarr_log_window: LidarrImportLogWindow | None = None
         self.library_stats_worker: LibraryStatsWorker | None = None
         self.library_stats_window: LibraryStatsWindow | None = None
+        self.declutter_scan_worker: DeclutterScanWorker | None = None
+        self.declutter_sort_dialog: DeclutterSortDialog | None = None
         self.settings = QSettings("AcoustID", "AcoustID")
         self._acoustid_only_run = False
 
@@ -528,10 +668,23 @@ class MainWindow(QMainWindow):
         self.library_stats_button.setEnabled(False)
         self.library_stats_button.clicked.connect(self._start_library_stats_scan)
 
+        self.sort_declutter_button = QPushButton("Sort Reissues/Compilations...")
+        self.sort_declutter_button.setToolTip(
+            "Scans this folder recursively (read-only) for releases classified as reissues\n"
+            "or compilations, then previews moving each into a \"Reissues\"/\"Compilations\"\n"
+            "subfolder of its own artist folder - e.g. \"Simple Minds/Album (1998 Remaster)\"\n"
+            "-> \"Simple Minds/Reissues/Album (1998 Remaster)\", \"Simple Minds/Greatest Hits\"\n"
+            "-> \"Simple Minds/Compilations/Greatest Hits\". Nothing is moved until you review\n"
+            "the list and confirm."
+        )
+        self.sort_declutter_button.setEnabled(False)
+        self.sort_declutter_button.clicked.connect(self._start_declutter_scan)
+
         row.addWidget(QLabel("Folder:"))
         row.addWidget(self.folder_edit, stretch=1)
         row.addWidget(browse_button)
         row.addWidget(self.library_stats_button)
+        row.addWidget(self.sort_declutter_button)
         return row
 
     def _build_options_row(self) -> QHBoxLayout:
@@ -688,6 +841,7 @@ class MainWindow(QMainWindow):
         self.checkonly_mp3_button.setEnabled(True)
         self.lidarr_import_button.setEnabled(True)
         self.library_stats_button.setEnabled(True)
+        self.sort_declutter_button.setEnabled(True)
         if self.files:
             self.status_label.setText(f"{len(self.files)} FLAC file(s) found under {folder}")
         else:
@@ -806,6 +960,28 @@ class MainWindow(QMainWindow):
     def _on_library_stats_error(self, message: str) -> None:
         self.library_stats_button.setEnabled(True)
         self.status_label.setText(f"Collection summary failed: {message}")
+        QMessageBox.critical(self, "AcoustID", message)
+
+    def _start_declutter_scan(self) -> None:
+        folder = Path(self.folder_edit.text())
+        self.sort_declutter_button.setEnabled(False)
+        self.status_label.setText(f"Scanning {folder} for reissues/compilations...")
+
+        self.declutter_scan_worker = DeclutterScanWorker(folder)
+        self.declutter_scan_worker.scan_finished.connect(self._on_declutter_scan_finished)
+        self.declutter_scan_worker.scan_error.connect(self._on_declutter_scan_error)
+        self.declutter_scan_worker.start()
+
+    def _on_declutter_scan_finished(self, moves: list[library_stats.DeclutterMove]) -> None:
+        self.sort_declutter_button.setEnabled(True)
+        self.status_label.setText(f"Reissue/compilation scan complete: {len(moves)} candidate(s)")
+        folder = Path(self.folder_edit.text())
+        self.declutter_sort_dialog = DeclutterSortDialog(moves, folder, self)
+        self.declutter_sort_dialog.show()
+
+    def _on_declutter_scan_error(self, message: str) -> None:
+        self.sort_declutter_button.setEnabled(True)
+        self.status_label.setText(f"Reissue/compilation scan failed: {message}")
         QMessageBox.critical(self, "AcoustID", message)
 
     def _maybe_autoimport_to_lidarr(self) -> None:

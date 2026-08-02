@@ -140,3 +140,136 @@ def test_scan_release_provenance_labels_untagged_release_as_unknown(tmp_path: Pa
     counts = library_stats.scan_release_provenance(tmp_path)
 
     assert counts == {"Unknown": 1}
+
+
+def test_plan_reissue_moves_targets_reissues_subfolder_of_parent(tmp_path: Path) -> None:
+    reissue = tmp_path / "Simple Minds" / "Album (1998 Remaster)"
+    reissue.mkdir(parents=True)
+    make_flac(reissue / "01.flac", releasetype="album", date="1998-01-01", originaldate="1980-01-01")
+
+    original = tmp_path / "Simple Minds" / "Debut (1980)"
+    original.mkdir(parents=True)
+    make_flac(original / "01.flac", releasetype="album", date="1980-01-01", originaldate="1980-01-01")
+
+    moves = library_stats.plan_reissue_moves(tmp_path)
+
+    assert len(moves) == 1
+    assert moves[0].source == reissue
+    assert moves[0].destination == tmp_path / "Simple Minds" / "Reissues" / "Album (1998 Remaster)"
+    assert moves[0].selected is True
+    assert moves[0].error is None
+
+
+def test_plan_reissue_moves_skips_releases_already_under_reissues_folder(tmp_path: Path) -> None:
+    already_sorted = tmp_path / "Simple Minds" / "Reissues" / "Album (1998 Remaster)"
+    already_sorted.mkdir(parents=True)
+    make_flac(already_sorted / "01.flac", releasetype="album", date="1998-01-01", originaldate="1980-01-01")
+
+    moves = library_stats.plan_reissue_moves(tmp_path)
+
+    assert moves == []
+
+
+def test_execute_declutter_moves_moves_the_directory(tmp_path: Path) -> None:
+    reissue = tmp_path / "Simple Minds" / "Album (1998 Remaster)"
+    reissue.mkdir(parents=True)
+    make_flac(reissue / "01.flac", releasetype="album", date="1998-01-01", originaldate="1980-01-01")
+
+    moves = library_stats.plan_reissue_moves(tmp_path)
+    library_stats.execute_declutter_moves(moves)
+
+    assert moves[0].error is None
+    assert not reissue.exists()
+    destination = tmp_path / "Simple Minds" / "Reissues" / "Album (1998 Remaster)"
+    assert destination.is_dir()
+    assert (destination / "01.flac").exists()
+
+
+def test_execute_declutter_moves_skips_unselected_moves(tmp_path: Path) -> None:
+    reissue = tmp_path / "Simple Minds" / "Album (1998 Remaster)"
+    reissue.mkdir(parents=True)
+    make_flac(reissue / "01.flac", releasetype="album", date="1998-01-01", originaldate="1980-01-01")
+
+    moves = library_stats.plan_reissue_moves(tmp_path)
+    moves[0].selected = False
+    library_stats.execute_declutter_moves(moves)
+
+    assert moves[0].error is None
+    assert reissue.exists()
+    assert not (tmp_path / "Simple Minds" / "Reissues").exists()
+
+
+def test_execute_declutter_moves_reports_error_without_aborting_batch(tmp_path: Path) -> None:
+    reissue = tmp_path / "Simple Minds" / "Album (1998 Remaster)"
+    reissue.mkdir(parents=True)
+    make_flac(reissue / "01.flac", releasetype="album", date="1998-01-01", originaldate="1980-01-01")
+    conflicting_destination = tmp_path / "Simple Minds" / "Reissues" / "Album (1998 Remaster)"
+    conflicting_destination.mkdir(parents=True)  # already occupied
+
+    moves = library_stats.plan_reissue_moves(tmp_path)
+    library_stats.execute_declutter_moves(moves)
+
+    assert moves[0].error is not None
+    assert reissue.exists()  # left in place, not overwritten
+
+
+def test_plan_compilation_moves_targets_compilations_subfolder_of_parent(tmp_path: Path) -> None:
+    compilation = tmp_path / "Simple Minds" / "Greatest Hits"
+    compilation.mkdir(parents=True)
+    path = compilation / "01.flac"
+    make_flac(path, date="1999-01-01")
+    flac = FLAC(path)
+    flac["releasetype"] = ["album", "compilation"]
+    flac.save()
+
+    original = tmp_path / "Simple Minds" / "Debut (1980)"
+    original.mkdir(parents=True)
+    make_flac(original / "01.flac", releasetype="album", date="1980-01-01", originaldate="1980-01-01")
+
+    moves = library_stats.plan_compilation_moves(tmp_path)
+
+    assert len(moves) == 1
+    assert moves[0].source == compilation
+    assert moves[0].destination == tmp_path / "Simple Minds" / "Compilations" / "Greatest Hits"
+
+
+def test_plan_declutter_moves_combines_reissues_and_compilations_in_one_walk(tmp_path: Path) -> None:
+    reissue = tmp_path / "Simple Minds" / "Album (1998 Remaster)"
+    reissue.mkdir(parents=True)
+    make_flac(reissue / "01.flac", releasetype="album", date="1998-01-01", originaldate="1980-01-01")
+
+    compilation = tmp_path / "Simple Minds" / "Greatest Hits"
+    compilation.mkdir(parents=True)
+    path = compilation / "01.flac"
+    make_flac(path, date="1999-01-01")
+    flac = FLAC(path)
+    flac["releasetype"] = ["album", "compilation"]
+    flac.save()
+
+    original = tmp_path / "Simple Minds" / "Debut (1980)"
+    original.mkdir(parents=True)
+    make_flac(original / "01.flac", releasetype="album", date="1980-01-01", originaldate="1980-01-01")
+
+    moves = library_stats.plan_declutter_moves(tmp_path)
+
+    destinations = {move.source.name: move.destination for move in moves}
+    assert destinations == {
+        "Album (1998 Remaster)": tmp_path / "Simple Minds" / "Reissues" / "Album (1998 Remaster)",
+        "Greatest Hits": tmp_path / "Simple Minds" / "Compilations" / "Greatest Hits",
+    }
+
+
+def test_plan_declutter_moves_skips_releases_already_sorted(tmp_path: Path) -> None:
+    already_sorted_reissue = tmp_path / "Simple Minds" / "Reissues" / "Album (1998 Remaster)"
+    already_sorted_reissue.mkdir(parents=True)
+    make_flac(already_sorted_reissue / "01.flac", releasetype="album", date="1998-01-01", originaldate="1980-01-01")
+
+    already_sorted_compilation = tmp_path / "Simple Minds" / "Compilations" / "Greatest Hits"
+    already_sorted_compilation.mkdir(parents=True)
+    path = already_sorted_compilation / "01.flac"
+    make_flac(path, date="1999-01-01")
+    flac = FLAC(path)
+    flac["releasetype"] = ["album", "compilation"]
+    flac.save()
+
+    assert library_stats.plan_declutter_moves(tmp_path) == []

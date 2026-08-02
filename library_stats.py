@@ -1,6 +1,7 @@
 """Scans a folder tree and tallies release types (Album, EP, Single,
 Compilation, Promo, etc.) and release provenance (Original, Reissue,
-Compilation, Unknown) across a music collection.
+Compilation, Unknown) across a music collection, and can sort reissues
+into a "Reissues" subfolder of their own artist folder.
 
 Reads the same tags this tool already round-trips when converting FLAC to
 MP3: the "releasetype" Vorbis comment (FLAC) / "MusicBrainz Album Type"
@@ -17,7 +18,9 @@ release.
 from __future__ import annotations
 
 import os
+import shutil
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 
 from mutagen.flac import FLAC
@@ -25,6 +28,13 @@ from mutagen.id3 import ID3
 
 _AUDIO_EXTENSIONS = {".flac", ".mp3"}
 UNKNOWN_LABEL = "Unknown"
+REISSUES_FOLDER_NAME = "Reissues"
+COMPILATIONS_FOLDER_NAME = "Compilations"
+# Which classify_provenance() label sorts into which subfolder - the two
+# categories that clutter an artist folder with releases that aren't the
+# original studio album (a compilation pulls the same songs together from
+# across many albums; a reissue is the same album re-dated).
+_DECLUTTER_FOLDERS = {"Reissue": REISSUES_FOLDER_NAME, "Compilation": COMPILATIONS_FOLDER_NAME}
 
 
 def _read_release_tags(path: Path) -> tuple[list[str], str | None, str | None]:
@@ -118,3 +128,85 @@ def scan_release_provenance(root: Path) -> Counter[str]:
         release_types, date, originaldate = _read_release_tags(dirpath / filename)
         counts[classify_provenance(release_types, date, originaldate)] += 1
     return counts
+
+
+@dataclass
+class DeclutterMove:
+    """One planned relocation: move `source` (a release directory
+    classified as a Reissue or Compilation) to `destination` (a
+    "Reissues"/"Compilations" subfolder of its own parent directory).
+    `selected` starts True and is meant to be flipped off by the caller
+    (e.g. a "Keep as it is" toggle in the UI) before execute_declutter_moves
+    runs - unselected moves are left alone. `error` is set by
+    execute_declutter_moves: None means success (or not yet attempted)."""
+
+    source: Path
+    destination: Path
+    selected: bool = True
+    error: str | None = None
+
+
+def _plan_moves(root: Path, wanted_label: str | None) -> list[DeclutterMove]:
+    """Shared walk for plan_reissue_moves/plan_compilation_moves/
+    plan_declutter_moves: one release per directory (see
+    scan_release_types), skipping anything already sorted into a
+    Reissues/Compilations subfolder. `wanted_label` restricts to just
+    "Reissue" or "Compilation"; None plans both in a single walk."""
+    moves = []
+    for dirpath, filename in _iter_releases(root):
+        if dirpath.parent.name in (REISSUES_FOLDER_NAME, COMPILATIONS_FOLDER_NAME):
+            continue
+        release_types, date, originaldate = _read_release_tags(dirpath / filename)
+        label = classify_provenance(release_types, date, originaldate)
+        if wanted_label is not None and label != wanted_label:
+            continue
+        folder_name = _DECLUTTER_FOLDERS.get(label)
+        if folder_name is None:
+            continue
+        moves.append(DeclutterMove(dirpath, dirpath.parent / folder_name / dirpath.name))
+    return moves
+
+
+def plan_reissue_moves(root: Path) -> list[DeclutterMove]:
+    """Walk `root` recursively and plan moving every release classified as
+    a Reissue into a "Reissues" subfolder of its own parent directory -
+    e.g. "Simple Minds/Album (1998 Remaster)" -> "Simple Minds/Reissues/
+    Album (1998 Remaster)". Read-only: does not touch the filesystem."""
+    return _plan_moves(root, "Reissue")
+
+
+def plan_compilation_moves(root: Path) -> list[DeclutterMove]:
+    """Walk `root` recursively and plan moving every release classified as
+    a Compilation into a "Compilations" subfolder of its own parent
+    directory - e.g. "Simple Minds/Greatest Hits" -> "Simple Minds/
+    Compilations/Greatest Hits". Read-only: does not touch the
+    filesystem."""
+    return _plan_moves(root, "Compilation")
+
+
+def plan_declutter_moves(root: Path) -> list[DeclutterMove]:
+    """Walk `root` recursively once and plan moving every release
+    classified as a Reissue or a Compilation into a "Reissues"/
+    "Compilations" subfolder of its own parent directory - the combination
+    of plan_reissue_moves and plan_compilation_moves, minus a second walk.
+    Read-only: does not touch the filesystem."""
+    return _plan_moves(root, None)
+
+
+def execute_declutter_moves(moves: list[DeclutterMove]) -> None:
+    """Perform every `selected` move from a plan_*_moves() call, in place:
+    each DeclutterMove's `error` is set to None on success or a message on
+    failure (a conflicting destination, a permissions error, ...), so one
+    bad move never aborts the rest of the batch."""
+    for move in moves:
+        if not move.selected:
+            continue
+        if move.destination.exists():
+            move.error = f"destination already exists: {move.destination}"
+            continue
+        try:
+            move.destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(move.source), str(move.destination))
+            move.error = None
+        except OSError as exc:
+            move.error = str(exc)
