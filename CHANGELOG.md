@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.8]
+
 ### Fixed
 - `convert_one` no longer deletes a fully converted, correctly tagged MP3
   just because removing the source FLAC afterwards failed (e.g. a
