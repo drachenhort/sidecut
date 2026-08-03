@@ -1071,6 +1071,19 @@ class MainWindow(QMainWindow):
         row.addWidget(self.lidarr_force_reimport_button)
         return row
 
+    def closeEvent(self, event: Any) -> None:
+        reply = QMessageBox.question(
+            self,
+            "Quit AcoustID",
+            "Are you sure you want to quit?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            event.accept()
+        else:
+            event.ignore()
+
     def _open_lidarr_settings(self) -> None:
         LidarrSettingsDialog(self.settings, self).exec()
 

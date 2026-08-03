@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Closing the main window now asks "Are you sure you want to quit?"
+  first (defaults to No) instead of quitting immediately.
+
 ### Changed
 - Settings dialog is bigger by default (was sized to content, cramped
   the path-hint text).
