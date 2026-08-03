@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.15]
+
 ### Changed
 - Renamed the program from AcoustID to **Sidecut** (window title, entry
   point `acoustid.py` → `sidecut.py`) - "AcoustID" is already the name of
