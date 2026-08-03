@@ -48,7 +48,7 @@ import lidarr
 import lidarr_hook
 import library_stats
 
-__version__ = "0.13"
+__version__ = "0.14"
 
 STATUS_COLUMN_LABELS = {
     "pending": "Pending",
