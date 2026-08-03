@@ -545,7 +545,13 @@ def check_acoustid(path: Path, api_key: str) -> AcoustIDCheck:
     release_type = _lookup_release_type(api_key, duration, fingerprint, best.get("id"), tagged_album)
 
     best_id = recording_ids[0] if recording_ids else None
-    mb_release_type, mb_date, mb_originaldate = _lookup_release_provenance(best_id, tagged_album)
+    # A fingerprint can link multiple recordings (e.g. separate mono/stereo
+    # mixes); when the file's own tagged ID is one of them, look up
+    # provenance for that specific recording rather than always the first
+    # one in the list, so a "match" result's release-type/date can't end
+    # up describing a different recording than the one actually matched.
+    provenance_id = existing_id if existing_id in recording_ids else best_id
+    mb_release_type, mb_date, mb_originaldate = _lookup_release_provenance(provenance_id, tagged_album)
     release_type = release_type or mb_release_type
 
     if existing_id:

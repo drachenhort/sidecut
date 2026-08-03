@@ -511,6 +511,69 @@ def test_check_acoustid_surfaces_date_and_originaldate_from_musicbrainz(tmp_path
     assert result.release_type == "compilation"
 
 
+def test_check_acoustid_provenance_uses_tagged_recording_not_first_linked(tmp_path: Path) -> None:
+    # A fingerprint can link multiple recordings (e.g. separate mono/stereo
+    # mixes). When the file's tagged recording is not the first one in the
+    # list, provenance (date/originaldate/release_type) must still come
+    # from the recording actually matched, not from recordings[0].
+    src = tmp_path / "song.flac"
+    make_flac(src, MUSICBRAINZ_TRACKID="mb-track-B")
+    recordings_data = {
+        "status": "ok",
+        "results": [
+            {
+                "id": "acoustid-1",
+                "score": 0.9,
+                "recordings": [
+                    {"id": "mb-track-A", "title": "Song (Mono)"},
+                    {"id": "mb-track-B", "title": "Song (Stereo)"},
+                ],
+            }
+        ],
+    }
+    releasegroups_data = {"status": "ok", "results": [{"id": "acoustid-1", "score": 0.9}]}
+    musicbrainz_by_recording = {
+        "mb-track-A": {
+            "releases": [
+                {
+                    "title": "Wrong Release",
+                    "date": "1999-01-01",
+                    "release-group": {"primary-type": "Compilation", "first-release-date": "1999-01-01"},
+                }
+            ]
+        },
+        "mb-track-B": {
+            "releases": [
+                {
+                    "title": "Right Release",
+                    "date": "1980-01-01",
+                    "release-group": {"primary-type": "Album", "first-release-date": "1980-01-01"},
+                }
+            ]
+        },
+    }
+
+    def fake_get(url, params=None, timeout=None, headers=None):
+        response = Mock()
+        response.raise_for_status = Mock()
+        if "musicbrainz.org" in url:
+            response.json.return_value = musicbrainz_by_recording[url.rsplit("/", 1)[-1]]
+        elif params.get("meta") == "releasegroups":
+            response.json.return_value = releasegroups_data
+        else:
+            response.json.return_value = recordings_data
+        return response
+
+    with patch("subprocess.run", side_effect=_fake_fpcalc_run), patch("requests.get", side_effect=fake_get):
+        result = core.check_acoustid(src, "fake-api-key")
+
+    assert result.status == "match"
+    assert result.recording_id == "mb-track-B"
+    assert result.date == "1980-01-01"
+    assert result.originaldate == "1980-01-01"
+    assert result.release_type == "album"
+
+
 def test_check_acoustid_prefers_musicbrainz_release_matching_tagged_album(tmp_path: Path) -> None:
     src = tmp_path / "song.flac"
     make_flac(src, album="Greatest Hits")

@@ -4,6 +4,21 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- AcoustID provenance (release date/originaldate/type) could be pulled
+  from the wrong linked recording when a fingerprint matches multiple
+  recordings (e.g. separate mono/stereo mixes) and the file's tagged ID
+  isn't the first one AcoustID returns - it now looks up provenance for
+  the recording actually matched.
+- Lidarr import's skipped-file list could get corrupted for any file with
+  multiple rejection reasons: both the inter-file join and Lidarr's own
+  multi-reason join reused the same "; " separator, so splitting it back
+  apart could break one file's entry into two malformed fragments. The
+  list is now passed through directly instead of round-tripping through
+  a joined/split string.
+- Quit-confirmation dialog still said "Quit AcoustID" after the program
+  was renamed to Sidecut.
+
 ## [0.17]
 
 ### Added

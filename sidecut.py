@@ -235,7 +235,7 @@ class LidarrImportWorker(QThread):
     UI doesn't block on the network round-trip. Entirely independent of
     BatchConverter/self.files - it just tells Lidarr which folder to scan."""
 
-    import_finished = Signal(int, int, str)  # imported_count, skipped_count, "; "-joined skipped names
+    import_finished = Signal(int, int, object)  # imported_count, skipped_count, list[str] skipped names
     import_error = Signal(str)
     import_progress = Signal(str)  # one line per step, e.g. "Submitting batch 2/5..."
     command_queued = Signal(int)  # Lidarr command id, right after it's accepted
@@ -280,7 +280,7 @@ class LidarrImportWorker(QThread):
         except lidarr.LidarrError as exc:
             self.import_error.emit(str(exc))
             return
-        self.import_finished.emit(imported, skipped, "; ".join(skipped_names))
+        self.import_finished.emit(imported, skipped, skipped_names)
 
 
 class LidarrConnectionTestWorker(QThread):
@@ -1227,7 +1227,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: Any) -> None:
         reply = QMessageBox.question(
             self,
-            "Quit AcoustID",
+            "Quit Sidecut",
             "Are you sure you want to quit?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
@@ -1411,15 +1411,14 @@ class MainWindow(QMainWindow):
         if self.queue_window is not None:
             self.queue_window.track_command(command_id)
 
-    def _on_lidarr_import_finished(self, imported: int, skipped: int, skipped_names: str) -> None:
+    def _on_lidarr_import_finished(self, imported: int, skipped: int, skipped_names: list[str]) -> None:
         self.lidarr_import_button.setEnabled(True)
         self.lidarr_force_reimport_button.setEnabled(True)
         self.status_label.setText(f"Lidarr import: {imported} imported, {skipped} skipped")
         message = f"Lidarr imported {imported} file(s)."
         if skipped:
-            entries = skipped_names.split("; ")
-            log_path = self._write_lidarr_warnings_log(skipped, entries)
-            top_reason, top_count = _skip_reason_counts(entries).most_common(1)[0]
+            log_path = self._write_lidarr_warnings_log(skipped, skipped_names)
+            top_reason, top_count = _skip_reason_counts(skipped_names).most_common(1)[0]
             message += (
                 f"\n\n{skipped} file(s) Lidarr couldn't auto-match were left untouched "
                 f"(most common: {top_count}x {top_reason}). See:\n{log_path}"
