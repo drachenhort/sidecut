@@ -5,6 +5,7 @@ to MP3, with an optional AcoustID/MusicBrainz identity check."""
 from __future__ import annotations
 
 import os
+import re
 import sys
 import threading
 from collections import Counter
@@ -74,6 +75,22 @@ def _format_bytes(num_bytes: int) -> str:
             return f"{size:.1f} {unit}"
         size /= 1024
     return f"{size:.1f} GB"
+
+
+def _categorize_skip_reason(reason: str) -> str:
+    """Strip the per-file specifics off a skip reason (our own
+    release-mismatch hint, or Lidarr's own "for [/path/...]" suffix) so
+    e.g. 30 files failing for the same underlying cause count as one
+    category instead of 30 different-looking one-offs."""
+    reason = re.sub(r"\s*\(Lidarr may have matched the wrong release edition.*\)$", "", reason)
+    reason = re.sub(r"\s+for\s+\[.*\]$", "", reason)
+    return reason
+
+
+def _skip_reason_counts(entries: list[str]) -> Counter[str]:
+    """Count "filename: reason" entries (as produced by
+    lidarr.import_folder's skipped_names) by normalized reason category."""
+    return Counter(_categorize_skip_reason(entry.split(": ", 1)[1] if ": " in entry else entry) for entry in entries)
 
 
 class BatchConverter(QThread):
@@ -1400,14 +1417,26 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"Lidarr import: {imported} imported, {skipped} skipped")
         message = f"Lidarr imported {imported} file(s)."
         if skipped:
-            log_path = self._write_lidarr_warnings_log(skipped, skipped_names)
-            message += f"\n\n{skipped} file(s) Lidarr couldn't auto-match were left untouched. See:\n{log_path}"
+            entries = skipped_names.split("; ")
+            log_path = self._write_lidarr_warnings_log(skipped, entries)
+            top_reason, top_count = _skip_reason_counts(entries).most_common(1)[0]
+            message += (
+                f"\n\n{skipped} file(s) Lidarr couldn't auto-match were left untouched "
+                f"(most common: {top_count}x {top_reason}). See:\n{log_path}"
+            )
         QMessageBox.information(self, "Lidarr import", message)
 
-    def _write_lidarr_warnings_log(self, skipped: int, skipped_names: str) -> Path:
+    def _write_lidarr_warnings_log(self, skipped: int, entries: list[str]) -> Path:
         folder = Path(self.folder_edit.text())
         log_path = folder / f"lidarr-import-warnings-{datetime.now():%Y%m%d-%H%M%S}.log"
-        content = f"{skipped} file(s) Lidarr couldn't auto-match:\n" + "\n".join(skipped_names.split("; "))
+        summary = "\n".join(
+            f"  {count}x  {reason}" for reason, count in _skip_reason_counts(entries).most_common()
+        )
+        content = (
+            f"{skipped} file(s) Lidarr couldn't auto-match.\n\n"
+            f"By reason:\n{summary}\n\n"
+            f"Full list:\n" + "\n".join(entries)
+        )
         try:
             log_path.write_text(content, encoding="utf-8")
         except OSError:

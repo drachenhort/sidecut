@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Lidarr import's finished popup and skip-reasons log now group skipped
+  files by normalized reason (e.g. "32x Has missing tracks") instead of
+  just a flat file list, so a big batch's dominant failure mode is
+  visible at a glance instead of scrolling through every filename.
+
 ## [0.12]
 
 ### Added
