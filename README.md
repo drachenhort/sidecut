@@ -1,4 +1,4 @@
-# AcoustID
+# Sidecut
 
 A native Qt/KDE window to recursively transcode a folder of FLAC files to
 MP3, in place, with an optional AcoustID/MusicBrainz identity check.
@@ -30,8 +30,8 @@ anything. You don't need to want MP3s at all to get value out of this tool.
 ## Usage
 
 ```bash
-python3 acoustid.py                  # opens the window, remembers the last folder used
-python3 acoustid.py /path/to/music   # opens the window with the folder pre-filled
+python3 sidecut.py                  # opens the window, remembers the last folder used
+python3 sidecut.py /path/to/music   # opens the window with the folder pre-filled
 ```
 
 In the window:
@@ -44,11 +44,16 @@ In the window:
 2. Choose a **quality** preset and the number of **parallel jobs**.
 3. Optionally tick **Check AcoustID** to fingerprint each file and compare
    it against MusicBrainz before converting (see below). The AcoustID API
-   key is entered via **Settings...** (masked like a password; hold the
-   👁 button next to it to reveal), alongside the Lidarr settings.
+   key is entered via **Settings...**, alongside the Lidarr settings and
+   the auto-continue countdown (see below).
 4. **Transcode** — each file gets its own row with a live progress bar
    (percent, encode speed) fed from ffmpeg's `-progress` stream. **Cancel**
    stops queued files immediately and lets in-flight ones finish or abort.
+   When it finishes, a summary popup counts down and auto-continues after
+   a configurable delay (**Settings...** > "Auto-continue after
+   conversion", seconds, default 1800 = 30 min; 0 disables it and always
+   waits for OK) - useful for unattended/scheduled runs, since Lidarr
+   auto-import couldn't start until someone dismissed the popup.
 
 ## AcoustID check (optional)
 
@@ -121,12 +126,13 @@ In the window:
   the import finishes (or fails) so you can scroll back through it.
 - If a Lidarr URL/API key are already configured in Settings..., a
   separate **Lidarr Queue** window opens automatically on startup,
-  showing Lidarr's live download queue (`GET /api/v1/queue`): title,
-  status, quality, progress, and time left, refreshing every 5 seconds
-  on its own - no manual refresh needed. It's read-only (no queue item
-  actions) and has no reopen control: closing it stops polling for the
-  rest of the session. This is deliberate, not a bug - if you close it
-  and want it back, restart the app.
+  showing Lidarr's live download queue (`GET /api/v1/queue`) plus the
+  live status of manual imports this tool itself queues: title, status,
+  quality, progress, and time left, refreshing every 5 seconds on its
+  own - no manual refresh needed. It's read-only (no queue item actions).
+  A **Queue...** button next to Settings... reopens it if closed -
+  closing just hides it and pauses polling, so reopening resumes right
+  where it left off instead of losing the last known state.
 - Tick **Auto-import to Lidarr after conversion** to skip that manual
   click: whenever **Transcode** finishes converting at least one file, the
   same import runs automatically right after. Off by default. It only
@@ -223,13 +229,13 @@ import new downloads automatically, with no GUI involved:
 1. Configure the Lidarr URL/API key once via **Settings...** in the
    GUI (see above) - the headless hook reuses the same saved settings.
 2. In Lidarr: **Settings → Connect → +  → Custom Script**.
-3. **Path**: the full path to `acoustid.py` (it's already executable and
+3. **Path**: the full path to `sidecut.py` (it's already executable and
    has a `#!/usr/bin/env python3` shebang).
 4. Tick **On Import** (and **On Upgrade** if you also want re-conversions
    on upgrades), then **Save** and use Lidarr's **Test** button to verify.
 
 From then on, whenever Lidarr imports a new FLAC download, it invokes
-`acoustid.py` directly with details as `lidarr_*` environment variables
+`sidecut.py` directly with details as `lidarr_*` environment variables
 (the same mechanism `lidarr-flac2mp3` uses) instead of opening a window:
 it converts the newly added FLAC(s) using your saved quality preset, then
 - if a Lidarr URL/API key are configured - hands the result to Lidarr's
@@ -238,7 +244,7 @@ Lidarr event (Grab, Rename, etc.) is ignored. To try it by hand without
 waiting for a real download:
 
 ```bash
-lidarr_eventtype=Test /full/path/to/acoustid.py
+lidarr_eventtype=Test /full/path/to/sidecut.py
 ```
 
 See `lidarr_hook.py` for the implementation.
@@ -290,7 +296,7 @@ See `lidarr_hook.py` for the implementation.
   widgets, directly unit tested.
 - `library_stats.py` — release-type scanning for Collection Summary; no
   Qt dependency, directly unit tested.
-- `acoustid.py` — the PySide6 window and its background conversion
+- `sidecut.py` — the PySide6 window and its background conversion
   thread; `main()` dispatches to `lidarr_hook` before touching Qt if
   invoked as a Lidarr Custom Script.
 

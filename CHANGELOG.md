@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- Renamed the program from AcoustID to **Sidecut** (window title, entry
+  point `acoustid.py` → `sidecut.py`) - "AcoustID" is already the name of
+  the external fingerprinting service this tool talks to, which made the
+  program's own name confusing. All references to the actual AcoustID
+  service/API/checkbox/column are unchanged, only the program's own
+  identity moved.
+
 ## [0.14]
 
 ### Changed

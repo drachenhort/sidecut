@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Headless driver for acoustid.py, flac2mp3's PySide6 desktop app.
+"""Headless driver for sidecut.py, flac2mp3's PySide6 desktop app.
 
 Runs the real QApplication with the "offscreen" QPA platform (no X server /
 xvfb needed - offscreen renders into memory, which is why this works in a
@@ -14,7 +14,7 @@ Commands:
   select <attr> <index>     setCurrentIndex on a QComboBox
   screenshot <path>         grab() the main window and save a PNG
   wait <ms>                 pump the Qt event loop for <ms> milliseconds
-  eval <expr>               eval(expr, {"window": window, "acoustid": acoustid})
+  eval <expr>               eval(expr, {"window": window, "sidecut": sidecut})
                              and print its repr - escape hatch for anything
                              not covered above (e.g. reading a label's text,
                              checking a QSettings value)
@@ -22,10 +22,10 @@ Commands:
 
 Every reply is exactly one line: "OK <message>" or "ERR <message>".
 
-Isolate QSettings before launching this (acoustid.py uses
+Isolate QSettings before launching this (sidecut.py uses
 QSettings("AcoustID", "AcoustID"), which persists to $HOME/.config on Linux)
 by running with a scratch HOME, e.g.:
-  HOME=/tmp/acoustid-driver-home QT_QPA_PLATFORM=offscreen python3 driver.py
+  HOME=/tmp/sidecut-driver-home QT_QPA_PLATFORM=offscreen python3 driver.py
 Otherwise you inherit (and can overwrite) the real user's last-used folder,
 quality setting, and Lidarr credentials.
 """
@@ -41,7 +41,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QLineEdit
 
-import acoustid
+import sidecut
 
 
 def reply(ok: bool, message: str) -> None:
@@ -50,7 +50,7 @@ def reply(ok: bool, message: str) -> None:
 
 def main() -> None:
     app = QApplication(sys.argv[:1])
-    window = acoustid.MainWindow()
+    window = sidecut.MainWindow()
     window.resize(760, 480)
     window.show()
     app.processEvents()
@@ -106,7 +106,7 @@ def main() -> None:
 
             elif cmd == "eval":
                 expr = line[len("eval "):]
-                result = eval(expr, {"window": window, "acoustid": acoustid})  # noqa: S307 - trusted local driver input
+                result = eval(expr, {"window": window, "sidecut": sidecut})  # noqa: S307 - trusted local driver input
                 reply(True, repr(result))
 
             elif cmd == "quit":

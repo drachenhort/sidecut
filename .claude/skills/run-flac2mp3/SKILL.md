@@ -1,9 +1,9 @@
 ---
 name: run-flac2mp3
-description: Build, run, and drive flac2mp3's acoustid.py PySide6 desktop app headlessly. Use when asked to start/run/launch flac2mp3, take a screenshot of its UI, click a button or interact with a widget, or confirm a UI change works in the real app (not just pytest).
+description: Build, run, and drive flac2mp3's sidecut.py PySide6 desktop app headlessly. Use when asked to start/run/launch flac2mp3, take a screenshot of its UI, click a button or interact with a widget, or confirm a UI change works in the real app (not just pytest).
 ---
 
-flac2mp3's UI is `acoustid.py`, a PySide6/Qt desktop app. It runs headless
+flac2mp3's UI is `sidecut.py`, a PySide6/Qt desktop app. It runs headless
 in this container via Qt's `offscreen` QPA platform (no X server, no xvfb,
 no window manager needed — `offscreen` renders straight into memory). Drive
 it with `.claude/skills/run-flac2mp3/driver.py`: pipe it newline-delimited
@@ -41,14 +41,14 @@ order, and exits — there is no persistent session to attach to across
 separate tool calls (this container has no `tmux`), so a "session" is one
 heredoc covering everything you need from that launch.
 
-**Isolate settings first.** `acoustid.py` uses
+**Isolate settings first.** `sidecut.py` uses
 `QSettings("AcoustID", "AcoustID")`, which on Linux persists to
 `$HOME/.config/AcoustID/AcoustID.conf`. Point `HOME` at a scratch
 directory or you'll read (and can overwrite) the real user's last-used
 folder, quality setting, and Lidarr credentials:
 
 ```bash
-FAKEHOME=/tmp/acoustid-driver-home
+FAKEHOME=/tmp/sidecut-driver-home
 mkdir -p "$FAKEHOME"
 cat <<'EOF' | HOME="$FAKEHOME" QT_QPA_PLATFORM=offscreen .venv/bin/python3 .claude/skills/run-flac2mp3/driver.py
 screenshot /tmp/shots/01-initial.png
@@ -57,7 +57,7 @@ EOF
 ```
 
 Must run with cwd = `flac2mp3/` (the driver adds cwd to `sys.path` itself
-to find `acoustid.py`, but only if cwd is right when it starts).
+to find `sidecut.py`, but only if cwd is right when it starts).
 
 Screenshots land wherever you point the `screenshot` command's path —
 use an absolute path, e.g. under `/tmp/shots/`.
@@ -72,28 +72,28 @@ use an absolute path, e.g. under `/tmp/shots/`.
 | `select <attr> <index>` | `setCurrentIndex` on a `QComboBox` |
 | `screenshot <path>` | `window.grab().save(path)` — PNG of the main window |
 | `wait <ms>` | Pump the Qt event loop for `<ms>` milliseconds |
-| `eval <expr>` | `eval(expr, {"window": window, "acoustid": acoustid})`, prints `repr()` — escape hatch for anything not covered above |
+| `eval <expr>` | `eval(expr, {"window": window, "sidecut": sidecut})`, prints `repr()` — escape hatch for anything not covered above |
 | `quit` | Exit cleanly |
 
-Widget names are the same attribute names used in `acoustid.py`'s
+Widget names are the same attribute names used in `sidecut.py`'s
 `MainWindow` (e.g. `folder_edit`, `library_stats_button`,
 `sort_declutter_button`, `quality_combo`, `workers_spin`, `start_button`,
 `cancel_button`, `acoustid_checkbox`, `acoustid_autocorrect_checkbox`,
 `lidarr_autoimport_checkbox`, `lidarr_import_button`,
 `lidarr_force_reimport_button`, `checkonly_button`,
-`checkonly_mp3_button`) — grep `acoustid.py` for `self\.\w* = Q` to find
+`checkonly_mp3_button`) — grep `sidecut.py` for `self\.\w* = Q` to find
 more, including inside dialogs (`LidarrSettingsDialog`'s
 `url_edit`/`key_edit`/`test_button`, etc. — reach those via `eval` since
 they're not `MainWindow` attributes, e.g.
-`eval window._open_lidarr_settings() or window.findChild(acoustid.QDialog)`).
+`eval window._open_lidarr_settings() or window.findChild(sidecut.QDialog)`).
 
 ### Worked example: set a folder, run the Collection Summary scan, screenshot it
 
 ```bash
-FAKEHOME=/tmp/acoustid-driver-home
+FAKEHOME=/tmp/sidecut-driver-home
 mkdir -p "$FAKEHOME"
 cat <<'EOF' | HOME="$FAKEHOME" QT_QPA_PLATFORM=offscreen .venv/bin/python3 .claude/skills/run-flac2mp3/driver.py
-eval window._set_folder(acoustid.Path("/home/sigma/git/flac2mp3/test-flac"))
+eval window._set_folder(sidecut.Path("/home/sigma/git/flac2mp3/test-flac"))
 wait 300
 click library_stats_button
 eval window.library_stats_worker.wait(8000)
@@ -114,7 +114,7 @@ The Lidarr Queue window (`LidarrQueueWindow`) auto-opens in
 `QSettings` — so seed the fake home's ini file *before* launching:
 
 ```bash
-FAKEHOME=/tmp/acoustid-driver-home2
+FAKEHOME=/tmp/sidecut-driver-home2
 mkdir -p "$FAKEHOME/.config/AcoustID"
 cat > "$FAKEHOME/.config/AcoustID/AcoustID.conf" <<'EOF'
 [General]
@@ -138,8 +138,8 @@ Unauthorized...`), table stayed empty, no crash.
 ## Run (human path)
 
 ```bash
-.venv/bin/python3 acoustid.py                  # opens a real window, remembers the last folder
-.venv/bin/python3 acoustid.py /path/to/music    # opens with the folder pre-filled
+.venv/bin/python3 sidecut.py                  # opens a real window, remembers the last folder
+.venv/bin/python3 sidecut.py /path/to/music    # opens with the folder pre-filled
 ```
 
 Needs a real display (or `QT_QPA_PLATFORM=offscreen`, in which case
@@ -164,7 +164,7 @@ to stop.
   accordingly (`library_stats_button`, `start_button`, etc. all start
   disabled). Setting the text field directly leaves those buttons
   disabled and `click`ing them does nothing. Use
-  `eval window._set_folder(acoustid.Path("/abs/path"))` instead.
+  `eval window._set_folder(sidecut.Path("/abs/path"))` instead.
 - **Background `QThread` work needs `worker.wait(timeout_ms)`, not a
   guessed `wait <ms>`.** Several buttons kick off a `QThread`
   (`LibraryStatsWorker`, `LidarrQueueWorker`, `DeclutterScanWorker`, ...)
@@ -183,7 +183,7 @@ to stop.
 - **`python3 path/to/driver.py` does not add cwd to `sys.path`** — only
   the driver's own directory. The driver inserts `os.getcwd()` into
   `sys.path` itself at the top, but that only works if cwd is
-  `flac2mp3/` when you launch it (`import acoustid` fails otherwise).
+  `flac2mp3/` when you launch it (`import sidecut` fails otherwise).
 - **No `tmux` in this container.** The driver is a straight stdin/stdout
   REPL instead of a background-and-attach pattern — one heredoc per
   "session," which is fine since each launch is fast (~1-2s) and the app
@@ -192,7 +192,7 @@ to stop.
 - **Quitting the process while a `QThread` is still running aborts it**
   (`QThread: Destroyed while thread is still running` → SIGABRT). This
   is a real, pre-existing behavior of several worker classes in
-  `acoustid.py`, not a driver bug — always `wait()` on any worker you
+  `sidecut.py`, not a driver bug — always `wait()` on any worker you
   started before sending `quit`.
 - **Real `QSettings` are shared with the actual user's app** if you don't
   set `HOME`. In this container a real Lidarr instance happened to
@@ -203,7 +203,7 @@ to stop.
 
 ## Troubleshooting
 
-- **`ModuleNotFoundError: No module named 'acoustid'`**: cwd wasn't
+- **`ModuleNotFoundError: No module named 'sidecut'`**: cwd wasn't
   `flac2mp3/` when the driver started. `cd` there (in the same shell
   invocation as the `HOME=... python3 .../driver.py` command — cwd does
   not persist reliably across separate tool calls in this harness).

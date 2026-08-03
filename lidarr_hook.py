@@ -1,6 +1,6 @@
 """Headless entry point for running this tool as a Lidarr Custom Script.
 
-Register this program (acoustid.py, which is executable and already has a
+Register this program (sidecut.py, which is executable and already has a
 `#!/usr/bin/env python3` shebang) as a Custom Script under Lidarr's
 Settings > Connect, triggered "On Import"/"On Upgrade". Lidarr calls it
 directly right after grabbing/importing a release, passing details as

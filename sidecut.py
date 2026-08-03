@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AcoustID: a KDE/Qt window to recursively transcode a folder of FLAC files
+"""Sidecut: a KDE/Qt window to recursively transcode a folder of FLAC files
 to MP3, with an optional AcoustID/MusicBrainz identity check."""
 
 from __future__ import annotations
@@ -991,7 +991,7 @@ class ConversionCompleteDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self, initial_folder: Path | None = None) -> None:
         super().__init__()
-        self.setWindowTitle(f"AcoustID v{__version__}")
+        self.setWindowTitle(f"Sidecut v{__version__}")
         self.resize(760, 480)
 
         self.files: list[Path] = []
@@ -1245,7 +1245,7 @@ class MainWindow(QMainWindow):
         lidarr_api_key = self.settings.value("lidarr_api_key", "")
         if not lidarr_url or not lidarr_api_key:
             QMessageBox.critical(
-                self, "AcoustID", "Set the Lidarr URL and API key first, via Settings..."
+                self, "Sidecut", "Set the Lidarr URL and API key first, via Settings..."
             )
             return
         if self.queue_window is None:
@@ -1300,11 +1300,11 @@ class MainWindow(QMainWindow):
 
     def _require_acoustid_apikey(self) -> str | None:
         if not core.check_fpcalc():
-            QMessageBox.critical(self, "AcoustID", "The AcoustID check needs fpcalc (chromaprint) on PATH.")
+            QMessageBox.critical(self, "Sidecut", "The AcoustID check needs fpcalc (chromaprint) on PATH.")
             return None
         apikey = self.settings.value("acoustid_api_key", "").strip()
         if not apikey:
-            QMessageBox.critical(self, "AcoustID", "The AcoustID check needs an API key, set via Settings...")
+            QMessageBox.critical(self, "Sidecut", "The AcoustID check needs an API key, set via Settings...")
             return None
         return apikey
 
@@ -1329,7 +1329,7 @@ class MainWindow(QMainWindow):
         folder = Path(self.folder_edit.text())
         files = core.find_flac_and_mp3_files(folder)
         if not files:
-            QMessageBox.information(self, "AcoustID", f"No .flac or .mp3 files found under {folder}")
+            QMessageBox.information(self, "Sidecut", f"No .flac or .mp3 files found under {folder}")
             return
         # Deliberately not stored on self.files: this scan (and its table
         # listing) is scoped to this button only, so Start and Check
@@ -1344,7 +1344,7 @@ class MainWindow(QMainWindow):
         api_key = self.settings.value("lidarr_api_key", "")
         if not base_url or not api_key:
             QMessageBox.critical(
-                self, "AcoustID", "Set the Lidarr URL and API key first, via Settings..."
+                self, "Sidecut", "Set the Lidarr URL and API key first, via Settings..."
             )
             return
 
@@ -1372,14 +1372,14 @@ class MainWindow(QMainWindow):
     def _on_force_reimport_plan_error(self, message: str) -> None:
         self.lidarr_force_reimport_button.setEnabled(True)
         self.status_label.setText(f"Force Reimport preview failed: {message}")
-        QMessageBox.critical(self, "AcoustID", message)
+        QMessageBox.critical(self, "Sidecut", message)
 
     def _run_lidarr_import(self, force: bool) -> None:
         base_url = self.settings.value("lidarr_url", "")
         api_key = self.settings.value("lidarr_api_key", "")
         if not base_url or not api_key:
             QMessageBox.critical(
-                self, "AcoustID", "Set the Lidarr URL and API key first, via Settings..."
+                self, "Sidecut", "Set the Lidarr URL and API key first, via Settings..."
             )
             return
 
@@ -1475,7 +1475,7 @@ class MainWindow(QMainWindow):
     def _on_library_stats_error(self, message: str) -> None:
         self.library_stats_button.setEnabled(True)
         self.status_label.setText(f"Collection summary failed: {message}")
-        QMessageBox.critical(self, "AcoustID", message)
+        QMessageBox.critical(self, "Sidecut", message)
 
     def _start_declutter_scan(self) -> None:
         folder = Path(self.folder_edit.text())
@@ -1497,7 +1497,7 @@ class MainWindow(QMainWindow):
     def _on_declutter_scan_error(self, message: str) -> None:
         self.sort_declutter_button.setEnabled(True)
         self.status_label.setText(f"Reissue/compilation scan failed: {message}")
-        QMessageBox.critical(self, "AcoustID", message)
+        QMessageBox.critical(self, "Sidecut", message)
 
     def _maybe_autoimport_to_lidarr(self) -> None:
         """Called after a real conversion finishes. Unlike the manual
@@ -1634,7 +1634,7 @@ def main() -> None:
     if icon_path.is_file():
         app.setWindowIcon(QIcon(str(icon_path)))
     if not core.check_ffmpeg():
-        QMessageBox.critical(None, "AcoustID", "ffmpeg is required but was not found on PATH.")
+        QMessageBox.critical(None, "Sidecut", "ffmpeg is required but was not found on PATH.")
         sys.exit(1)
 
     initial_folder = Path(sys.argv[1]) if len(sys.argv) > 1 else None
