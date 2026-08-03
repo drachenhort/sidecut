@@ -5,6 +5,13 @@ All notable changes to this project are documented in this file.
 ## [Unreleased]
 
 ### Added
+- The Lidarr Queue window now also shows the live status of manual
+  imports this tool itself queues (Import to Lidarr / Force Reimport),
+  as extra rows alongside the download queue - previously those only
+  showed up in the separate import log window, and never in the Queue
+  window, since Lidarr's `/api/v1/queue` only covers downloads, not
+  manual-import commands. A finished command's row is shown once, then
+  drops off on the next refresh.
 - Closing the main window now asks "Are you sure you want to quit?"
   first (defaults to No) instead of quitting immediately.
 

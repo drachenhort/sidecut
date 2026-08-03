@@ -40,6 +40,7 @@ from typing import Any, Callable
 import requests
 
 OnProgress = Callable[[str], None] | None
+OnCommandQueued = Callable[[int], None] | None
 
 
 def _report(on_progress: OnProgress, message: str) -> None:
@@ -568,6 +569,27 @@ def clear_stale_trackfiles_for_artist(
     return _delete_genuinely_stale_trackfiles(base_url, api_key, trackfiles, local_root, lidarr_root, on_progress)
 
 
+def get_command(base_url: str, api_key: str, command_id: int) -> dict[str, Any]:
+    """One-shot fetch of a queued command's current status (GET
+    /api/v1/command/{id}) - unlike wait_for_command, this doesn't block
+    until the command finishes, so a caller can poll it alongside other
+    work (e.g. a UI's own refresh timer)."""
+    try:
+        response = _with_retry(
+            requests.get,
+            _url(base_url, f"/api/v1/command/{command_id}"),
+            headers=_headers(api_key),
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise LidarrError(f"Failed to fetch command {command_id}: {exc}") from exc
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise LidarrError(f"Unexpected response fetching command {command_id}: {exc}") from exc
+
+
 def wait_for_command(
     base_url: str,
     api_key: str,
@@ -625,6 +647,7 @@ def import_folder(
     local_root: str = "",
     lidarr_root: str = "",
     on_progress: OnProgress = None,
+    on_command_queued: OnCommandQueued = None,
 ) -> tuple[int, int, list[str]]:
     """Scan `folder` via Lidarr's manual-import endpoint and submit the
     candidates Lidarr fully auto-matched. For candidates Lidarr rejected
@@ -648,6 +671,9 @@ def import_folder(
     at each step (artist resolution, stale-trackfile cleanup, each scan/
     submit/poll against Lidarr's API) so a caller can surface what Lidarr
     is doing in real time instead of going silent for the whole import.
+    `on_command_queued`, if given, is called with each batch's command id
+    right after Lidarr accepts it, so a caller can track its status (e.g.
+    GET /api/v1/command/{id}) independently of this function's own polling.
 
     Returns (imported_count, skipped_count, skipped_file_descriptions),
     where each skipped description includes Lidarr's own rejection reason.
@@ -702,6 +728,8 @@ def import_folder(
         batch_num = i // IMPORT_BATCH_SIZE + 1
         _report(on_progress, f"Submitting batch {batch_num}/{total_batches} ({len(batch)} file(s)) to Lidarr...")
         command_id = submit_manual_import(base_url, api_key, batch, import_mode)
+        if on_command_queued is not None:
+            on_command_queued(command_id)
         result = wait_for_command(base_url, api_key, command_id, on_progress=on_progress)
         if result.get("status") == "failed":
             raise LidarrError(f"Lidarr reported the import failed: {result.get('message', 'unknown error')}")
@@ -777,6 +805,7 @@ def force_reimport_folder(
     local_root: str = "",
     lidarr_root: str = "",
     on_progress: OnProgress = None,
+    on_command_queued: OnCommandQueued = None,
 ) -> tuple[int, int, list[str]]:
     """Force Lidarr to fully reimport `folder`, including files it already
     has a TrackFile record for - unlike import_folder, which always skips
@@ -806,7 +835,9 @@ def force_reimport_folder(
 
     if not in_scope:
         _report(on_progress, "No existing Lidarr track file records under this folder - nothing to clear")
-        return import_folder(base_url, api_key, folder, import_mode, local_root, lidarr_root, on_progress)
+        return import_folder(
+            base_url, api_key, folder, import_mode, local_root, lidarr_root, on_progress, on_command_queued
+        )
 
     _report(on_progress, f"Moving {len(in_scope)} tracked file(s) aside to clear their Lidarr records...")
     holding_dir = folder.parent / f".flac2mp3-reimport-{uuid.uuid4().hex[:8]}"
@@ -843,4 +874,6 @@ def force_reimport_folder(
             )
 
     _report(on_progress, "Re-scanning and reimporting...")
-    return import_folder(base_url, api_key, folder, import_mode, local_root, lidarr_root, on_progress)
+    return import_folder(
+        base_url, api_key, folder, import_mode, local_root, lidarr_root, on_progress, on_command_queued
+    )

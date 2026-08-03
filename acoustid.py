@@ -221,6 +221,7 @@ class LidarrImportWorker(QThread):
     import_finished = Signal(int, int, str)  # imported_count, skipped_count, "; "-joined skipped names
     import_error = Signal(str)
     import_progress = Signal(str)  # one line per step, e.g. "Submitting batch 2/5..."
+    command_queued = Signal(int)  # Lidarr command id, right after it's accepted
 
     def __init__(
         self,
@@ -257,6 +258,7 @@ class LidarrImportWorker(QThread):
                 local_root=self.local_root,
                 lidarr_root=self.lidarr_root,
                 on_progress=self.import_progress.emit,
+                on_command_queued=self.command_queued.emit,
             )
         except lidarr.LidarrError as exc:
             self.import_error.emit(str(exc))
@@ -306,6 +308,29 @@ class LidarrQueueWorker(QThread):
             self.queue_error.emit(f"Failed to read the Lidarr queue: {exc}")
             return
         self.queue_finished.emit(records)
+
+
+class LidarrCommandsWorker(QThread):
+    """Fetches the current status of tracked Lidarr commands (manual
+    imports this tool itself queued) off the UI thread - one GET per
+    command id, since Lidarr has no bulk "fetch these ids" endpoint."""
+
+    commands_finished = Signal(list)  # list[dict] - raw GET /api/v1/command/{id} payloads
+
+    def __init__(self, base_url: str, api_key: str, command_ids: list[int]) -> None:
+        super().__init__()
+        self.base_url = base_url
+        self.api_key = api_key
+        self.command_ids = command_ids
+
+    def run(self) -> None:
+        results = []
+        for command_id in self.command_ids:
+            try:
+                results.append(lidarr.get_command(self.base_url, self.api_key, command_id))
+            except lidarr.LidarrError:
+                continue  # transient fetch failure - just skip it this round, next poll retries
+        self.commands_finished.emit(results)
 
 
 class LidarrImportLogWindow(QDialog):
@@ -605,6 +630,14 @@ def _queue_record_quality(record: dict[str, Any]) -> str:
     return quality.get("name", "")
 
 
+def _command_status_text(status: dict[str, Any]) -> str:
+    text = str(status.get("status", "")).title()
+    message = status.get("message")
+    if message:
+        text += f": {message}"
+    return text
+
+
 class _NumericTableWidgetItem(QTableWidgetItem):
     """Sorts by a numeric value (stashed in Qt.UserRole) instead of the
     displayed text, so e.g. "9%" sorts before "100%"."""
@@ -619,11 +652,13 @@ class _NumericTableWidgetItem(QTableWidgetItem):
 
 class LidarrQueueWindow(QDialog):
     """Standalone, non-modal window showing Lidarr's live download queue
-    (GET /api/v1/queue), polled every QUEUE_POLL_INTERVAL_MS. Read-only -
-    no queue item actions. Closing the window just hides it and pauses
-    polling; MainWindow keeps the instance around (table contents included)
-    and reopen() resumes it in place, so reopening never loses the last
-    known queue state."""
+    (GET /api/v1/queue), polled every QUEUE_POLL_INTERVAL_MS, plus the
+    live status of any manual-import commands this tool itself queued
+    (track_command) - so watching an import finish never requires
+    checking Lidarr's own logs. Read-only - no queue item actions.
+    Closing the window just hides it and pauses polling; MainWindow keeps
+    the instance around (table contents included) and reopen() resumes it
+    in place, so reopening never loses the last known queue state."""
 
     COLUMNS = ["Title", "Status", "Quality", "Progress", "Time left"]
 
@@ -632,6 +667,14 @@ class LidarrQueueWindow(QDialog):
         self.base_url = base_url
         self.api_key = api_key
         self.worker: LidarrQueueWorker | None = None
+        self.commands_worker: LidarrCommandsWorker | None = None
+        self._queue_records: list[dict[str, Any]] = []
+        self._tracked_command_ids: set[int] = set()
+        self._in_progress_commands: dict[int, dict[str, Any]] = {}
+        # Commands that just completed/failed - kept for exactly one
+        # _refresh_table() call so their final status gets shown once,
+        # then dropped.
+        self._finished_commands: dict[int, dict[str, Any]] = {}
 
         self.setWindowTitle("Lidarr Queue")
         self.resize(720, 400)
@@ -664,18 +707,55 @@ class LidarrQueueWindow(QDialog):
         self.raise_()
         self.activateWindow()
 
+    def track_command(self, command_id: int) -> None:
+        """Start showing a manual-import command (queued by this tool,
+        not a download) as a row until it completes or fails. Triggers an
+        immediate poll instead of waiting for the next timer tick, so it
+        shows up right away."""
+        self._tracked_command_ids.add(command_id)
+        self._poll_commands()
+
     def _poll(self) -> None:
-        if self.worker is not None and self.worker.isRunning():
+        if self.worker is None or not self.worker.isRunning():
+            self.worker = LidarrQueueWorker(self.base_url, self.api_key)
+            self.worker.queue_finished.connect(self._on_queue_finished)
+            self.worker.queue_error.connect(self._on_queue_error)
+            self.worker.start()
+        self._poll_commands()
+
+    def _poll_commands(self) -> None:
+        if not self._tracked_command_ids:
             return
-        self.worker = LidarrQueueWorker(self.base_url, self.api_key)
-        self.worker.queue_finished.connect(self._on_queue_finished)
-        self.worker.queue_error.connect(self._on_queue_error)
-        self.worker.start()
+        if self.commands_worker is not None and self.commands_worker.isRunning():
+            return
+        self.commands_worker = LidarrCommandsWorker(self.base_url, self.api_key, list(self._tracked_command_ids))
+        self.commands_worker.commands_finished.connect(self._on_commands_finished)
+        self.commands_worker.start()
 
     def _on_queue_finished(self, records: list[dict[str, Any]]) -> None:
+        self._queue_records = records
+        self._refresh_table()
+
+    def _on_queue_error(self, message: str) -> None:
+        self.status_label.setText(message)
+
+    def _on_commands_finished(self, statuses: list[dict[str, Any]]) -> None:
+        for status in statuses:
+            command_id = status.get("id")
+            if status.get("status") in ("completed", "failed"):
+                self._tracked_command_ids.discard(command_id)
+                self._in_progress_commands.pop(command_id, None)
+                self._finished_commands[command_id] = status
+            else:
+                self._in_progress_commands[command_id] = status
+        self._refresh_table()
+
+    def _refresh_table(self) -> None:
+        command_rows = [*self._in_progress_commands.values(), *self._finished_commands.values()]
         self.table.setSortingEnabled(False)
-        self.table.setRowCount(len(records))
-        for row, record in enumerate(records):
+        self.table.setRowCount(len(self._queue_records) + len(command_rows))
+        row = 0
+        for record in self._queue_records:
             self.table.setItem(row, 0, QTableWidgetItem(_queue_record_title(record)))
             self.table.setItem(row, 1, QTableWidgetItem(_queue_record_status(record)))
             self.table.setItem(row, 2, QTableWidgetItem(_queue_record_quality(record)))
@@ -683,16 +763,24 @@ class LidarrQueueWindow(QDialog):
             progress_value = float(progress_text.rstrip("%")) if progress_text else -1.0
             self.table.setItem(row, 3, _NumericTableWidgetItem(progress_text, progress_value))
             self.table.setItem(row, 4, QTableWidgetItem(record.get("timeleft") or ""))
+            row += 1
+        for status in command_rows:
+            self.table.setItem(row, 0, QTableWidgetItem(f"Manual import (command #{status.get('id')})"))
+            self.table.setItem(row, 1, QTableWidgetItem(_command_status_text(status)))
+            self.table.setItem(row, 2, QTableWidgetItem(""))
+            self.table.setItem(row, 3, _NumericTableWidgetItem("", -1.0))
+            self.table.setItem(row, 4, QTableWidgetItem(""))
+            row += 1
         self.table.setSortingEnabled(True)
-        self.status_label.setText("Queue is empty." if not records else "")
-
-    def _on_queue_error(self, message: str) -> None:
-        self.status_label.setText(message)
+        self.status_label.setText("Queue is empty." if not self._queue_records and not command_rows else "")
+        self._finished_commands.clear()
 
     def closeEvent(self, event: Any) -> None:
         self.timer.stop()
         if self.worker is not None:
             self.worker.wait(5000)
+        if self.commands_worker is not None:
+            self.commands_worker.wait(5000)
         event.ignore()
         self.hide()
 
@@ -1248,7 +1336,15 @@ class MainWindow(QMainWindow):
         self.lidarr_worker.import_progress.connect(self.lidarr_log_window.append_line)
         self.lidarr_worker.import_finished.connect(self._on_lidarr_import_finished)
         self.lidarr_worker.import_error.connect(self._on_lidarr_import_error)
+        self.lidarr_worker.command_queued.connect(self._on_lidarr_command_queued)
         self.lidarr_worker.start()
+
+    def _on_lidarr_command_queued(self, command_id: int) -> None:
+        # Only the already-open Queue window picks this up - it stays
+        # opt-in (see _show_lidarr_queue), an import shouldn't pop it open
+        # on its own.
+        if self.queue_window is not None:
+            self.queue_window.track_command(command_id)
 
     def _on_lidarr_import_finished(self, imported: int, skipped: int, skipped_names: str) -> None:
         self.lidarr_import_button.setEnabled(True)
