@@ -1218,8 +1218,22 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"Lidarr import: {imported} imported, {skipped} skipped")
         message = f"Lidarr imported {imported} file(s)."
         if skipped:
-            message += f"\n\n{skipped} file(s) Lidarr couldn't auto-match were left untouched:\n{skipped_names}"
+            log_path = self._write_lidarr_warnings_log(skipped, skipped_names)
+            message += f"\n\n{skipped} file(s) Lidarr couldn't auto-match were left untouched. See:\n{log_path}"
         QMessageBox.information(self, "Lidarr import", message)
+
+    def _write_lidarr_warnings_log(self, skipped: int, skipped_names: str) -> Path:
+        folder = Path(self.folder_edit.text())
+        log_path = folder / f"lidarr-import-warnings-{datetime.now():%Y%m%d-%H%M%S}.log"
+        content = f"{skipped} file(s) Lidarr couldn't auto-match:\n" + "\n".join(skipped_names.split("; "))
+        try:
+            log_path.write_text(content, encoding="utf-8")
+        except OSError:
+            fallback_dir = Path.home() / ".local" / "share" / "AcoustID" / "logs"
+            fallback_dir.mkdir(parents=True, exist_ok=True)
+            log_path = fallback_dir / log_path.name
+            log_path.write_text(content, encoding="utf-8")
+        return log_path
 
     def _on_lidarr_import_error(self, message: str) -> None:
         self.lidarr_import_button.setEnabled(True)
