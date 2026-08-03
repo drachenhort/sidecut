@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.13]
+
 ### Added
 - Lidarr import's finished popup and skip-reasons log now group skipped
   files by normalized reason (e.g. "32x Has missing tracks") instead of
