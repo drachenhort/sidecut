@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.12]
+
 ### Added
 - Lidarr import skip reasons now add a hint when Lidarr's rejection is
   "Has missing tracks" - this usually means Lidarr matched the album to
