@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.9]
+
+### Changed
+- Lidarr import's "couldn't auto-match" file list is now written to a
+  timestamped log file next to the imported folder instead of being
+  dumped into the finished-import popup, which could grow huge with
+  many unmatched files.
+
 ## [0.8]
 
 ### Fixed
