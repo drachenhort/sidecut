@@ -163,7 +163,7 @@ ACOUSTID_AUTOCORRECT_MIN_SCORE = 0.5
 # for the 1 req/sec courtesy limit and User-Agent requirement.
 MUSICBRAINZ_API_URL = "https://musicbrainz.org/ws/2"
 MUSICBRAINZ_RATE_LIMIT_PER_SECOND = 1.0
-MUSICBRAINZ_USER_AGENT = "flac2mp3/1.0 (+https://github.com/drachenhort/flac2mp3)"
+MUSICBRAINZ_USER_AGENT = "Sidecut/1.0 (+https://github.com/drachenhort/sidecut)"
 
 
 class _RateLimiter:
