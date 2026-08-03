@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.16]
+
 ### Fixed
 - `ffmpeg`/`fpcalc` subprocess output is now decoded as UTF-8 explicitly
   instead of relying on the OS default (which is only UTF-8 by default on
