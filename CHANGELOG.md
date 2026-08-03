@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- The Lidarr Queue window can now be reopened after closing it (new
+  "Queue..." button next to Lidarr's Settings...), instead of staying
+  closed until app restart. Closing just hides it and pauses polling -
+  reopening resumes polling in place, so the last known queue state is
+  never lost.
+- Lidarr Queue window's columns (Title, Status, Quality, Progress, Time
+  left) are now sortable by clicking their headers; Progress sorts
+  numerically instead of alphabetically.
+
 ## [0.9]
 
 ### Changed

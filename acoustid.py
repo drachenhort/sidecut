@@ -629,12 +629,25 @@ def _queue_record_quality(record: dict[str, Any]) -> str:
     return quality.get("name", "")
 
 
+class _NumericTableWidgetItem(QTableWidgetItem):
+    """Sorts by a numeric value (stashed in Qt.UserRole) instead of the
+    displayed text, so e.g. "9%" sorts before "100%"."""
+
+    def __init__(self, text: str, sort_value: float) -> None:
+        super().__init__(text)
+        self.setData(Qt.UserRole, sort_value)
+
+    def __lt__(self, other: Any) -> bool:
+        return self.data(Qt.UserRole) < other.data(Qt.UserRole)
+
+
 class LidarrQueueWindow(QDialog):
     """Standalone, non-modal window showing Lidarr's live download queue
     (GET /api/v1/queue), polled every QUEUE_POLL_INTERVAL_MS. Read-only -
-    no queue item actions. Closing the window stops polling; there is no
-    reopen control, by design (see docs/superpowers/specs/2026-08-02-
-    lidarr-queue-window-design.md)."""
+    no queue item actions. Closing the window just hides it and pauses
+    polling; MainWindow keeps the instance around (table contents included)
+    and reopen() resumes it in place, so reopening never loses the last
+    known queue state."""
 
     COLUMNS = ["Title", "Status", "Quality", "Progress", "Time left"]
 
@@ -653,6 +666,7 @@ class LidarrQueueWindow(QDialog):
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.table.setSortingEnabled(True)
         layout.addWidget(self.table)
 
         self.status_label = QLabel("Loading...")
@@ -663,6 +677,17 @@ class LidarrQueueWindow(QDialog):
         self.timer.start(QUEUE_POLL_INTERVAL_MS)
         self._poll()
 
+    def reopen(self) -> None:
+        """Bring the window back after it was closed, resuming polling
+        without touching the table - last known data stays on screen
+        until the next successful poll replaces it."""
+        if not self.timer.isActive():
+            self.timer.start(QUEUE_POLL_INTERVAL_MS)
+            self._poll()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
     def _poll(self) -> None:
         if self.worker is not None and self.worker.isRunning():
             return
@@ -672,13 +697,17 @@ class LidarrQueueWindow(QDialog):
         self.worker.start()
 
     def _on_queue_finished(self, records: list[dict[str, Any]]) -> None:
+        self.table.setSortingEnabled(False)
         self.table.setRowCount(len(records))
         for row, record in enumerate(records):
             self.table.setItem(row, 0, QTableWidgetItem(_queue_record_title(record)))
             self.table.setItem(row, 1, QTableWidgetItem(_queue_record_status(record)))
             self.table.setItem(row, 2, QTableWidgetItem(_queue_record_quality(record)))
-            self.table.setItem(row, 3, QTableWidgetItem(_queue_record_progress(record)))
+            progress_text = _queue_record_progress(record)
+            progress_value = float(progress_text.rstrip("%")) if progress_text else -1.0
+            self.table.setItem(row, 3, _NumericTableWidgetItem(progress_text, progress_value))
             self.table.setItem(row, 4, QTableWidgetItem(record.get("timeleft") or ""))
+        self.table.setSortingEnabled(True)
         self.status_label.setText("Queue is empty." if not records else "")
 
     def _on_queue_error(self, message: str) -> None:
@@ -688,7 +717,8 @@ class LidarrQueueWindow(QDialog):
         self.timer.stop()
         if self.worker is not None:
             self.worker.wait(5000)
-        super().closeEvent(event)
+        event.ignore()
+        self.hide()
 
 
 class DeclutterScanWorker(QThread):
@@ -1053,15 +1083,34 @@ class MainWindow(QMainWindow):
         self.lidarr_force_reimport_button.setEnabled(False)
         self.lidarr_force_reimport_button.clicked.connect(self._start_lidarr_force_reimport)
 
+        queue_button = QPushButton("Queue...")
+        queue_button.setToolTip("Open the live Lidarr download queue window (see Lidarr Queue at startup).")
+        queue_button.clicked.connect(self._show_lidarr_queue)
+
         row.addWidget(self.lidarr_autoimport_checkbox)
         row.addStretch(1)
         row.addWidget(settings_button)
+        row.addWidget(queue_button)
         row.addWidget(self.lidarr_import_button)
         row.addWidget(self.lidarr_force_reimport_button)
         return row
 
     def _open_lidarr_settings(self) -> None:
         LidarrSettingsDialog(self.settings, self).exec()
+
+    def _show_lidarr_queue(self) -> None:
+        lidarr_url = self.settings.value("lidarr_url", "")
+        lidarr_api_key = self.settings.value("lidarr_api_key", "")
+        if not lidarr_url or not lidarr_api_key:
+            QMessageBox.critical(
+                self, "AcoustID", "Set the Lidarr URL and API key first, via Settings..."
+            )
+            return
+        if self.queue_window is None:
+            self.queue_window = LidarrQueueWindow(lidarr_url, lidarr_api_key, self)
+            self.queue_window.show()
+        else:
+            self.queue_window.reopen()
 
     def _save_quality_setting(self) -> None:
         self.settings.setValue("quality", self.quality_combo.currentData())
