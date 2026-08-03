@@ -241,7 +241,8 @@ def find_flac_and_mp3_files(root: Path) -> list[Path]:
 def _fpcalc_fingerprint(path: Path) -> tuple[int, str]:
     """Run chromaprint's fpcalc and return (duration_seconds, fingerprint)."""
     proc = subprocess.run(
-        ["fpcalc", "-json", str(path)], capture_output=True, text=True, timeout=60, check=True,
+        ["fpcalc", "-json", str(path)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, check=True,
     )
     data = json.loads(proc.stdout)
     return int(data["duration"]), data["fingerprint"]
@@ -680,7 +681,9 @@ def run_ffmpeg(
         "-progress", "pipe:1", str(dst),
     ]
     proc = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
+        cmd,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace", bufsize=1,
     )
     assert proc.stdout is not None
     assert proc.stderr is not None

@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- `ffmpeg`/`fpcalc` subprocess output is now decoded as UTF-8 explicitly
+  instead of relying on the OS default (which is only UTF-8 by default on
+  Linux) - on Windows this could throw `UnicodeDecodeError` or mangle
+  non-ASCII filenames/tags in ffmpeg's error output. Malformed bytes are
+  replaced rather than raised, so a decoding hiccup can't crash a check
+  that's contractually "never raises".
+
 ## [0.15]
 
 ### Changed
