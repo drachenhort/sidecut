@@ -459,10 +459,10 @@ class LidarrSettingsDialog(QDialog):
         form.addRow("Lidarr API key:", self.key_edit)
 
         self.auto_continue_spin = QSpinBox()
-        self.auto_continue_spin.setRange(0, 120)
-        self.auto_continue_spin.setSuffix(" min")
+        self.auto_continue_spin.setRange(0, 7200)
+        self.auto_continue_spin.setSuffix(" sec")
         self.auto_continue_spin.setSpecialValueText("Off (wait for OK)")
-        self.auto_continue_spin.setValue(self.settings.value("conversion_complete_timeout_min", 30, type=int))
+        self.auto_continue_spin.setValue(self.settings.value("conversion_complete_timeout_sec", 1800, type=int))
         form.addRow("Auto-continue after conversion:", self.auto_continue_spin)
 
         self.local_root_edit = QLineEdit(self.settings.value("lidarr_local_root", ""))
@@ -519,7 +519,7 @@ class LidarrSettingsDialog(QDialog):
         self.settings.setValue("acoustid_api_key", self.acoustid_key_edit.text().strip())
         self.settings.setValue("lidarr_url", self.url_edit.text().strip())
         self.settings.setValue("lidarr_api_key", self.key_edit.text().strip())
-        self.settings.setValue("conversion_complete_timeout_min", self.auto_continue_spin.value())
+        self.settings.setValue("conversion_complete_timeout_sec", self.auto_continue_spin.value())
         self.settings.setValue("lidarr_local_root", self.local_root_edit.text().strip())
         self.settings.setValue("lidarr_root", self.lidarr_root_edit.text().strip())
         super().accept()
@@ -956,10 +956,10 @@ class ConversionCompleteDialog(QDialog):
     auto-import to Lidarr can run). A timeout of 0 disables the countdown
     entirely - OK has to be clicked, same as before this existed."""
 
-    def __init__(self, message: str, timeout_minutes: int, parent: QWidget | None = None) -> None:
+    def __init__(self, message: str, timeout_seconds: int, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Conversion complete")
-        self._remaining_seconds = timeout_minutes * 60
+        self._remaining_seconds = timeout_seconds
 
         layout = QVBoxLayout(self)
         message_label = QLabel(message)
@@ -973,7 +973,7 @@ class ConversionCompleteDialog(QDialog):
         layout.addWidget(buttons)
 
         self.timer: QTimer | None = None
-        if timeout_minutes > 0:
+        if timeout_seconds > 0:
             self.timer = QTimer(self)
             self.timer.timeout.connect(self._tick)
             self.timer.start(1000)
@@ -1602,13 +1602,13 @@ class MainWindow(QMainWindow):
         if ok_count:
             saved = src_bytes - dst_bytes
             percent = (saved / src_bytes * 100) if src_bytes else 0.0
-            timeout_minutes = self.settings.value("conversion_complete_timeout_min", 30, type=int)
+            timeout_seconds = self.settings.value("conversion_complete_timeout_sec", 1800, type=int)
             ConversionCompleteDialog(
                 f"Converted {ok_count} file(s) ({fail_count} failed)\n\n"
                 f"Before: {_format_bytes(src_bytes)}\n"
                 f"After:  {_format_bytes(dst_bytes)}\n"
                 f"Saved:  {_format_bytes(saved)} ({percent:.0f}%)",
-                timeout_minutes,
+                timeout_seconds,
                 self,
             ).exec()
             self._maybe_autoimport_to_lidarr()

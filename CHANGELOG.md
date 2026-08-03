@@ -4,6 +4,11 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- "Auto-continue after conversion" (Settings...) is now configured in
+  seconds instead of minutes, for finer control - same 1800s (30 min)
+  default, 0 still disables it.
+
 ## [0.13]
 
 ### Added
