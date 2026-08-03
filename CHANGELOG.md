@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.10]
+
 ### Added
 - The Lidarr Queue window can now be reopened after closing it (new
   "Queue..." button next to Lidarr's Settings...), instead of staying
