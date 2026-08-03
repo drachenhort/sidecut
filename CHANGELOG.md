@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- The "Conversion complete" popup now auto-continues after a configurable
+  countdown (Settings... > "Auto-continue after conversion", default 30
+  minutes, 0 disables it) instead of always blocking on an OK click -
+  useful for unattended/scheduled runs, since auto-import to Lidarr
+  couldn't start until someone dismissed the popup.
+
 ## [0.11]
 
 ### Added
