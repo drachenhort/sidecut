@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- Settings dialog is bigger by default (was sized to content, cramped
+  the path-hint text).
+- AcoustID API key field in Settings is plain text again instead of
+  masked - it's a personal API key, not a password, and masking it just
+  meant an extra hold-to-reveal click to double-check what was typed.
+
 ## [0.10]
 
 ### Added

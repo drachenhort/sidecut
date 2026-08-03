@@ -14,8 +14,8 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from PySide6.QtCharts import QBarCategoryAxis, QBarSet, QChart, QChartView, QHorizontalBarSeries, QValueAxis
-from PySide6.QtCore import QEvent, QSettings, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QEnterEvent, QIcon, QPainter
+from PySide6.QtCore import QSettings, Qt, QThread, QTimer, Signal
+from PySide6.QtGui import QIcon, QPainter
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -389,27 +389,6 @@ class ForceReimportPreviewDialog(QDialog):
         layout.addWidget(buttons)
 
 
-class _HoverRevealButton(QPushButton):
-    """A small button that reveals a masked QLineEdit's real text only
-    while the mouse is held over it - no click-to-toggle state to forget
-    to turn back off, the field re-masks itself the moment the mouse
-    leaves."""
-
-    def __init__(self, line_edit: QLineEdit, parent: QWidget | None = None) -> None:
-        super().__init__("👁", parent)
-        self.setFixedWidth(28)
-        self.setToolTip("Hold to reveal")
-        self._line_edit = line_edit
-
-    def enterEvent(self, event: QEnterEvent) -> None:
-        self._line_edit.setEchoMode(QLineEdit.Normal)
-        super().enterEvent(event)
-
-    def leaveEvent(self, event: QEvent) -> None:
-        self._line_edit.setEchoMode(QLineEdit.Password)
-        super().leaveEvent(event)
-
-
 class LidarrSettingsDialog(QDialog):
     """Modal dialog for all of this app's settings - Lidarr's URL/API key
     (with a Test Connection button so mistakes like a wrong host/port or
@@ -419,6 +398,7 @@ class LidarrSettingsDialog(QDialog):
     def __init__(self, settings: QSettings, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Settings")
+        self.resize(560, 360)
         self.settings = settings
         self.test_worker: LidarrConnectionTestWorker | None = None
 
@@ -427,11 +407,7 @@ class LidarrSettingsDialog(QDialog):
         form = QFormLayout()
         self.acoustid_key_edit = QLineEdit(self.settings.value("acoustid_api_key", ""))
         self.acoustid_key_edit.setPlaceholderText("AcoustID API key (get one at acoustid.org)")
-        self.acoustid_key_edit.setEchoMode(QLineEdit.Password)
-        acoustid_key_row = QHBoxLayout()
-        acoustid_key_row.addWidget(self.acoustid_key_edit)
-        acoustid_key_row.addWidget(_HoverRevealButton(self.acoustid_key_edit, self))
-        form.addRow("AcoustID API key:", acoustid_key_row)
+        form.addRow("AcoustID API key:", self.acoustid_key_edit)
 
         self.url_edit = QLineEdit(self.settings.value("lidarr_url", ""))
         self.url_edit.setPlaceholderText("http://localhost:8686")
