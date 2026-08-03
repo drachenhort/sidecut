@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.11]
+
 ### Added
 - The Lidarr Queue window now also shows the live status of manual
   imports this tool itself queues (Import to Lidarr / Force Reimport),
