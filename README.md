@@ -306,3 +306,7 @@ See `lidarr_hook.py` for the implementation.
 pip install -r requirements-dev.txt
 pytest
 ```
+
+## License
+
+MIT - see [LICENSE](LICENSE).

@@ -4,6 +4,9 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- MIT `LICENSE`.
+
 ## [0.16]
 
 ### Fixed
