@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file.
 ## [Unreleased]
 
 ### Added
+- Lidarr import skip reasons now add a hint when Lidarr's rejection is
+  "Has missing tracks" - this usually means Lidarr matched the album to
+  the wrong release edition (e.g. a folder mixing original and remix
+  versions of the same titles doesn't line up with whichever single
+  MusicBrainz release Lidarr picked), not a metadata profile block.
 - The "Conversion complete" popup now auto-continues after a configurable
   countdown (Settings... > "Auto-continue after conversion", default 30
   minutes, 0 disables it) instead of always blocking on an OK click -

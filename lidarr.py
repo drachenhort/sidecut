@@ -278,6 +278,16 @@ def has_missing_album_rejection(item: dict[str, Any]) -> bool:
     return any(_MISSING_ALBUM_REJECTION in reason.lower() for reason in _rejection_reasons(item))
 
 
+def has_missing_tracks_rejection(item: dict[str, Any]) -> bool:
+    """Whether this candidate was rejected because Lidarr matched an album
+    but thinks its tracklist isn't fully covered by the local files - the
+    standard symptom of Lidarr having picked a release edition that
+    doesn't match what's actually on disk (e.g. a folder mixing original
+    and remix versions of the same titles doesn't line up with whichever
+    single MusicBrainz release Lidarr selected for that album)."""
+    return any("missing tracks" in reason.lower() for reason in _rejection_reasons(item))
+
+
 def get_metadata_profile_disallowed_types(base_url: str, api_key: str, metadata_profile_id: int) -> set[str]:
     """Return every album type name this metadata profile does *not*
     allow - both primary (Album, EP, Single, Broadcast, Other) and
@@ -749,6 +759,12 @@ def import_folder(
                 _report(on_progress, f"Diagnosing why '{folder}' was skipped...")
                 explained_by_folder[folder] = explain_missing_album(base_url, api_key, artist_id, folder)
             reason = explained_by_folder[folder] or reason
+        elif has_missing_tracks_rejection(c):
+            reason += (
+                " (Lidarr may have matched the wrong release edition - check that this album's release in "
+                "Lidarr actually matches what's on disk, e.g. a folder mixing original and remix tracks "
+                "needs a release edition that includes both)"
+            )
         skipped_names.append(f"{path.name}: {reason}")
 
     _report(on_progress, f"Done: {imported} imported, {len(skipped)} skipped")

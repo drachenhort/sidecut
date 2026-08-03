@@ -401,6 +401,13 @@ def test_has_missing_album_rejection() -> None:
     assert lidarr.has_missing_album_rejection({"rejections": []}) is False
 
 
+def test_has_missing_tracks_rejection() -> None:
+    item = {"rejections": [{"reason": "Has missing tracks"}]}
+    assert lidarr.has_missing_tracks_rejection(item) is True
+    assert lidarr.has_missing_tracks_rejection({"rejections": [{"reason": "Track already has file"}]}) is False
+    assert lidarr.has_missing_tracks_rejection({"rejections": []}) is False
+
+
 def test_get_metadata_profile_disallowed_types() -> None:
     response = Mock()
     response.json.return_value = [
@@ -845,6 +852,34 @@ def test_import_folder_falls_back_to_plain_reason_when_not_explained() -> None:
     assert skipped_names == [
         "01.mp3: Couldn't find similar album for [/music/Eisbrecher/Eiskalt (2011)]"
     ]
+
+
+def test_import_folder_hints_at_release_mismatch_for_missing_tracks_skips() -> None:
+    artist_response = Mock()
+    artist_response.json.return_value = [{"id": 855, "path": "/music/Absurd Minds"}]
+    artist_trackfiles_response = Mock()
+    artist_trackfiles_response.json.return_value = []
+    candidates = [
+        {
+            "path": "/music/Absurd Minds/The Focus/01.mp3",
+            "artist": {"id": 855},
+            "album": {"id": 12},
+            "tracks": [],
+            "rejections": [{"reason": "Has missing tracks"}],
+        },
+    ]
+    candidates_response = Mock()
+    candidates_response.json.return_value = candidates
+
+    with patch("requests.get", side_effect=[artist_response, artist_trackfiles_response, candidates_response]):
+        imported, skipped, skipped_names = lidarr.import_folder(
+            "http://localhost:8686", "key", Path("/music/Absurd Minds/The Focus")
+        )
+
+    assert imported == 0
+    assert skipped == 1
+    assert len(skipped_names) == 1
+    assert skipped_names[0].startswith("01.mp3: Has missing tracks (Lidarr may have matched the wrong release")
 
 
 def test_import_folder_skips_submit_when_nothing_matched() -> None:
