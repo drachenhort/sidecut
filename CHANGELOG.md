@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.18]
+
 ### Fixed
 - AcoustID provenance (release date/originaldate/type) could be pulled
   from the wrong linked recording when a fingerprint matches multiple
