@@ -15,15 +15,13 @@ To cut a release:
    add a fresh empty `## [Unreleased]` above it.
 3. Commit both as `Bump version to X.Y`.
 4. Tag: `git tag -a sidecut-vX.Y -m "..."` (annotated, message summarizes the
-   version's changes) and push both the commit and the tag. The commit
-   must go via `git subtree push --prefix=flac2mp3 origin master` run from
-   the monorepo root (`/home/sigma/git`), **not** plain `git push` - this
-   repo's origin (github.com/drachenhort/sidecut) is a flattened mirror
-   (flac2mp3/* at repo root, no monorepo prefix, no `.claude/settings.json`
-   clutter); a plain `git push` sends the full monorepo-nested tree and
-   reintroduces exactly that mess (this happened once already - see the
-   2026-08-03 branch/history cleanup). Then `git push origin sidecut-vX.Y`
-   for the tag as normal (tags are standalone refs, unaffected by this).
+   version's changes), then plain `git push && git push origin sidecut-vX.Y`.
+   As of 2026-08-05 this directory is a standalone repo with its own `.git`
+   and origin github.com/drachenhort/sidecut - no subtree push, no monorepo
+   root. (Before that it was a subdirectory of a `/home/sigma/git` monorepo
+   and every push had to go through `git subtree push --prefix=flac2mp3`;
+   that history was split out and the old monorepo git dir retired, so the
+   subtree step no longer applies.)
    Releases through v0.14 are tagged `acoustid-vX.Y` (pre-rename) - leave
    those as-is, only new tags use the `sidecut-` prefix.
 5. Create the GitHub release from that same CHANGELOG section - don't
