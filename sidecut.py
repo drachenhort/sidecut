@@ -4,9 +4,18 @@ to MP3, with an optional AcoustID/MusicBrainz identity check."""
 
 from __future__ import annotations
 
+import sys
+
+if "--configure" in sys.argv[1:]:
+    # Must run before any PySide6/mutagen/requests imports below: this is
+    # the one entry point meant to work on a bare headless box (e.g. over
+    # SSH on Unraid) that doesn't have those installed at all.
+    import configure_cli
+
+    sys.exit(configure_cli.run())
+
 import os
 import re
-import sys
 import threading
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -43,6 +52,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import config
 import core
 import lidarr
 import lidarr_hook
@@ -443,17 +453,18 @@ class LidarrSettingsDialog(QDialog):
         self.resize(560, 360)
         self.settings = settings
         self.test_worker: LidarrConnectionTestWorker | None = None
+        file_defaults = config.load_settings(settings)
 
         layout = QVBoxLayout(self)
 
         form = QFormLayout()
-        self.acoustid_key_edit = QLineEdit(self.settings.value("acoustid_api_key", ""))
+        self.acoustid_key_edit = QLineEdit(file_defaults.get("acoustid_api_key", ""))
         self.acoustid_key_edit.setPlaceholderText("AcoustID API key (get one at acoustid.org)")
         form.addRow("AcoustID API key:", self.acoustid_key_edit)
 
-        self.url_edit = QLineEdit(self.settings.value("lidarr_url", ""))
+        self.url_edit = QLineEdit(file_defaults.get("lidarr_url", ""))
         self.url_edit.setPlaceholderText("http://localhost:8686")
-        self.key_edit = QLineEdit(self.settings.value("lidarr_api_key", ""))
+        self.key_edit = QLineEdit(file_defaults.get("lidarr_api_key", ""))
         self.key_edit.setPlaceholderText("API key (Lidarr: Settings > General)")
         form.addRow("Lidarr URL:", self.url_edit)
         form.addRow("Lidarr API key:", self.key_edit)

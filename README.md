@@ -228,6 +228,9 @@ import new downloads automatically, with no GUI involved:
 
 1. Configure the Lidarr URL/API key once via **Settings...** in the
    GUI (see above) - the headless hook reuses the same saved settings.
+   On a headless/SSH-only box with no GUI to launch, drop a config file
+   instead - see [Headless/SSH configuration](#headlessssh-configuration-optional)
+   below.
 2. In Lidarr: **Settings → Connect → +  → Custom Script**.
 3. **Path**: the full path to `sidecut.py` (it's already executable and
    has a `#!/usr/bin/env python3` shebang).
@@ -248,6 +251,84 @@ lidarr_eventtype=Test /full/path/to/sidecut.py
 ```
 
 See `lidarr_hook.py` for the implementation.
+
+## Headless/SSH configuration (optional)
+
+The AcoustID/Lidarr API keys are normally set via **Settings...** in the
+GUI, saved through Qt `QSettings`. On a headless box (e.g. Unraid) where
+you'd rather not launch the GUI at all - or can't - run:
+
+```bash
+sidecut.py --configure
+```
+
+which walks through each key in a small text UI, showing what's already
+set (masked) and leaving it unchanged if you just hit Enter:
+
+```
+============================================
+ Sidecut - Headless Configuration
+ File: /home/user/.config/flac2mp3/config.ini
+============================================
+
+Leave blank to keep current value. Values in [brackets] show
+what's currently set (env vars, if any, always win over this
+file and are shown for reference, not editable here).
+
+AcoustID API key   [not set]
+> ****************
+
+Lidarr URL         [http://localhost:8686]
+>
+
+Lidarr API key     [set, hidden]
+> ****************
+
+--------------------------------------------
+ Review
+--------------------------------------------
+  acoustid_api_key : ab12************
+  lidarr_url       : http://localhost:8686 (unchanged)
+  lidarr_api_key   : cd34************
+
+Verifying Lidarr connection...
+  Lidarr: OK - connected - Lidarr v2.5.1
+
+Save to /home/user/.config/flac2mp3/config.ini ? [Y/n] >
+
+Saved. lidarr_hook.py and the Settings dialog will pick this up.
+============================================
+```
+
+If a Lidarr URL/API key are both set, it's checked live (same
+`GET /api/v1/system/status` call as the GUI's **Test Connection**) before
+saving; a failed check asks for confirmation before saving anyway rather
+than blocking outright. On a box without `requests` installed at all, the
+check is silently skipped rather than failing the whole command. There's
+no equivalent live check for the AcoustID key - AcoustID's API has no
+key-only validation endpoint, only fingerprint lookups.
+
+If a `config.ini` already exists right next to `sidecut.py` itself (e.g.
+you copied `config.ini.example` into your checkout) or already exists at
+`~/.config/flac2mp3/config.ini` (or `$XDG_CONFIG_HOME/flac2mp3/config.ini`),
+that one is used, whichever it is - the script-dir one wins if somehow
+both exist. On a genuine first run with neither file present yet, it
+defaults to creating `config.ini` next to `sidecut.py` (falling back to
+`~/.config/flac2mp3/` only if that directory isn't writable), so a
+self-contained checkout stays self-contained even on a box where `$HOME`
+isn't set up the way you'd expect (some Unraid Custom Script/Docker
+contexts).
+
+Both `sidecut.py` (which pre-fills the Settings dialog from this file
+when `QSettings` is empty) and `lidarr_hook.py` (the headless Custom
+Script entry point) read it. Precedence, highest wins: environment
+variables (`ACOUSTID_API_KEY`, `LIDARR_URL`, `LIDARR_API_KEY` - handy for
+Docker/Unraid templates; `--configure` shows these as read-only when set,
+since editing the file wouldn't change anything) > values saved via the
+Settings dialog > `config.ini` next to `sidecut.py` > `config.ini` in
+`~/.config/flac2mp3/`. The file is plain text, same trust model as
+`QSettings`'s own ini backend (also plaintext) - keep its permissions
+restricted like you would any other credentials file.
 
 ## Collection Summary (optional)
 

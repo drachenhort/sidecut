@@ -1,6 +1,21 @@
+from pathlib import Path
+
 import pytest
 
+import config
 import core
+
+
+@pytest.fixture(autouse=True)
+def _isolated_config_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Without this, any test that goes through config.load_settings()/
+    config.resolve_config_path() without passing its own path (e.g. via
+    lidarr_hook.py) would read/write the real ~/.config/flac2mp3/config.ini
+    on the machine running the tests - or, since resolve_config_path()
+    defaults a true first run to next to the script, the real script_dir()
+    (wherever pytest itself was launched from)."""
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "home-config" / "config.ini")
+    monkeypatch.setattr("sys.argv", [str(tmp_path / "script-dir" / "sidecut.py")])
 
 
 @pytest.fixture(autouse=True)

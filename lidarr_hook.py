@@ -23,6 +23,7 @@ from typing import TextIO
 
 from PySide6.QtCore import QSettings
 
+import config
 import core
 import lidarr
 
@@ -76,6 +77,7 @@ def run_from_environment(settings: QSettings | None = None) -> int:
         return 0
 
     settings = settings if settings is not None else QSettings("AcoustID", "AcoustID")
+    resolved = config.load_settings(settings)
     quality = settings.value("quality") or "v0"
     if quality not in core.QUALITY_PRESETS:
         quality = "v0"
@@ -94,12 +96,13 @@ def run_from_environment(settings: QSettings | None = None) -> int:
                 print(f"Conversion failed for {path}: {result.message}", file=sys.stderr)
     print(f"Converted {ok_count}/{len(flac_paths)} FLAC file(s).")
 
-    lidarr_url = settings.value("lidarr_url", "")
-    api_key = settings.value("lidarr_api_key", "")
+    lidarr_url = resolved.get("lidarr_url", "")
+    api_key = resolved.get("lidarr_api_key", "")
     if not lidarr_url or not api_key:
         print(
-            "No Lidarr URL/API key configured (set them via this app's Lidarr Settings... dialog); "
-            "skipping the re-import step. Lidarr's own disk rescan will eventually pick up the new MP3s."
+            "No Lidarr URL/API key configured (set them via this app's Lidarr Settings... dialog, "
+            f"or {config.CONFIG_PATH}); skipping the re-import step. Lidarr's own disk rescan will "
+            "eventually pick up the new MP3s."
         )
         return 0 if ok_count == len(flac_paths) else 1
 

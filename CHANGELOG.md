@@ -4,6 +4,25 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Text-based config file (`~/.config/flac2mp3/config.ini`, see
+  `config.ini.example`) for setting the AcoustID/Lidarr API keys on a
+  headless/SSH box without launching the GUI. `sidecut.py`'s Settings
+  dialog pre-fills from it when `QSettings` is empty; `lidarr_hook.py`
+  reads it directly. Env vars (`ACOUSTID_API_KEY`, `LIDARR_URL`,
+  `LIDARR_API_KEY`) still take highest precedence.
+- `sidecut.py --configure`: a small interactive text UI to set those same
+  keys over SSH, with no config file editing by hand required. Verifies
+  the Lidarr URL/API key with a live connection check before saving
+  (skipped gracefully if `requests` isn't installed), and now works even
+  when PySide6 isn't installed at all, since it no longer imports Qt.
+- Config file lookup now also checks for `config.ini` next to `sidecut.py`
+  itself (not just `~/.config/flac2mp3/config.ini`), taking priority when
+  present. On a true first run (neither file exists yet), `--configure`
+  now defaults to creating it next to `sidecut.py` rather than under
+  `~/.config/flac2mp3/`, falling back only if that directory isn't
+  writable - useful when `$HOME` isn't set up the way you'd expect.
+
 ## [0.18]
 
 ### Fixed

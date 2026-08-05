@@ -1,0 +1,16 @@
+; flac2mp3 headless/SSH config.
+;
+; Copy this to ~/.config/flac2mp3/config.ini (or $XDG_CONFIG_HOME/flac2mp3/config.ini)
+; and fill in the values you need. Any key left blank/unset falls back to
+; whatever is already saved via sidecut.py's Settings dialog (QSettings), or
+; to the matching env var (ACOUSTID_API_KEY, LIDARR_URL, LIDARR_API_KEY),
+; which always wins if set.
+;
+; This file is read by both sidecut.py (to pre-fill the Settings dialog) and
+; lidarr_hook.py (so the Lidarr Custom Script hook works with no GUI ever
+; having been launched).
+
+[flac2mp3]
+acoustid_api_key =
+lidarr_url =
+lidarr_api_key =
