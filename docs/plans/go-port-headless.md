@@ -121,20 +121,57 @@ verifiable, not just assumed.
       `LidarrChecker` func rather than importing `internal/lidarr`
       directly, so this package doesn't have to wait on that one -
       `cmd/sidecut` wires the real implementation in later.
-- [ ] `internal/core`: ffmpeg conversion, tag read/write, AcoustID
-      lookup, MusicBrainz check - port `tests/test_core.py` cases
-- [ ] `internal/lidarr`: REST client (manual import, queue, connection
-      test, retry/backoff) - port `tests/test_lidarr.py` cases
-- [ ] `internal/hook`: Lidarr Custom Script env-var mode - port
-      `tests/test_lidarr_hook.py` cases
-- [ ] `cmd/sidecut`: CLI entrypoint wiring `--configure`, hook-mode
-      detection, and a `convert <folder>` command (headless equivalent
-      of the GUI's Transcode button)
-- [ ] `sidecut-go/README.md`: build/install instructions, what's ported
-      vs not (no GUI yet), how it relates to the Python project
-- [ ] Manual test: cross-compile for Linux/amd64, run on the same
-      unraid box as the Python version, confirm config.ini
-      compatibility (same file format/location rules)
+- [x] `internal/core` (partial): ffmpeg conversion (`ConvertOne`/
+      `RunFFmpeg`), `FindFLACFiles`/`FindFLACAndMP3Files`, `CopyTags`
+      (full Picard-compatible frame mapping table, ported from
+      `core.py`'s `_STANDARD_FRAME_BUILDERS`/`_FREETEXT_DESCRIPTIONS`) -
+      ported the `tests/test_core.py` cases covering these. **Not yet
+      ported**: `check_acoustid`/AcoustID+MusicBrainz HTTP lookups, and
+      `apply_release_type`/`apply_release_provenance`/
+      `correct_acoustid_mismatch` - the latter three rewrite a FLAC's
+      own Vorbis comments in place, which needs a FLAC metadata
+      *writer* (`internal/flactag` is read-only by design, see the
+      spike notes above); the AcoustID/MusicBrainz HTTP logic itself is
+      straightforward but sizeable (`net/http` + JSON, no writer
+      needed) and was deferred for scope, not for a technical reason -
+      pick either back up as its own pass.
+- [x] `internal/lidarr` (partial): retry/backoff (`withRetry`),
+      `CheckConnection`, `RemapPathToLidarr`/`LidarrPathToLocal`,
+      `DeleteTrackfile`, `GetQueue` - ported the matching
+      `tests/test_lidarr.py` cases (all against `httptest.Server`, no
+      real network). **Not yet ported**: the manual-import workflow
+      (`get_manual_import_candidates`/`submit_manual_import`/
+      `import_folder`/`force_reimport_folder`, stale-trackfile cleanup)
+      - same retry+`http.Client` pattern already established here, just
+      a lot of surface area; deferred for scope.
+- [x] `internal/hook`: Lidarr Custom Script env-var mode - ported the
+      `tests/test_lidarr_hook.py` cases that don't depend on
+      `lidarr.import_folder` (which isn't ported - see above). When
+      Lidarr URL/API key *are* configured, `RunFromEnvironment` still
+      converts every added FLAC but prints that it can't queue the
+      reimport step yet, rather than silently no-op'ing. No
+      QSettings-equivalent `quality` setting exists in this headless-only
+      port - callers pass a fixed `"v0"` today.
+- [x] `cmd/sidecut`: CLI entrypoint wiring `--configure` (via
+      `configureui.Run(lidarr.CheckConnection)`), hook-mode detection
+      (`hook.IsInvocation()`), and `sidecut convert <folder> [quality]`.
+      Manually smoke-tested end to end against a real sample FLAC file -
+      converts, tags land correctly, matches the Python GUI's Transcode
+      output.
+- [x] `sidecut-go/README.md`: build/install instructions, what's ported
+      vs not (no GUI yet, no AcoustID check, no Lidarr reimport), how it
+      relates to the Python project
+- [x] Manual test: cross-compiled `CGO_ENABLED=0 GOOS=linux GOARCH=amd64`
+      (static - the default cgo-linked build depends on glibc, risky
+      across distros/versions; static sidesteps that), copied to the
+      same unraid box as the Python version. Ran `--configure` against
+      the box's real, already-existing `config.ini` (written by the
+      Python version) - read and masked all three fields correctly,
+      confirming file-format compatibility; declined the save prompt so
+      nothing was overwritten. Full conversion untested there: that
+      unraid box's bare shell has no `ffmpeg` on `PATH` (the Python
+      version likely runs it via Docker/Nerd Tools) - conversion itself
+      is covered by `internal/core`'s local tests instead.
 
 ## Open questions
 
