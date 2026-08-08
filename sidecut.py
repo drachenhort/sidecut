@@ -1665,6 +1665,7 @@ class MainWindow(QMainWindow):
             bar = QProgressBar()
             bar.setRange(0, 100)
             self.table.setCellWidget(row, 2, bar)
+        self.table.scrollToItem(self.table.item(row, 0), QAbstractItemView.PositionAtCenter)
 
     def _on_file_progress(self, row: int, percent: float, speed: str) -> None:
         bar = self.table.cellWidget(row, 2)
