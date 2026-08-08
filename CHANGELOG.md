@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.20]
+
+### Added
+- The file list auto-scrolls to keep the row currently being converted
+  centered in view, instead of leaving the view wherever it was after
+  scanning.
+- Status label shows a live "N/M done, R remaining" countdown as each
+  file finishes converting/checking, instead of only updating at the
+  end of the batch.
+
 ## [0.19]
 
 ### Added
