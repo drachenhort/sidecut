@@ -17,6 +17,7 @@ if "--configure" in sys.argv[1:]:
 import os
 import re
 import threading
+import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -540,6 +541,7 @@ class FolderScanWorker(QThread):
     """Walks the folder for .flac files off the UI thread - a large library
     (thousands of files) makes a synchronous rglob() freeze the window."""
 
+    scan_progress = Signal(int)  # files found so far
     scan_finished = Signal(object)  # list[Path]
     scan_error = Signal(str)
 
@@ -549,11 +551,21 @@ class FolderScanWorker(QThread):
 
     def run(self) -> None:
         try:
-            files = core.find_flac_files(self.folder)
+            found: list[Path] = []
+            last_emit = time.monotonic()
+            for dirpath, _dirnames, filenames in os.walk(self.folder):
+                for name in filenames:
+                    if name.lower().endswith(".flac"):
+                        found.append(Path(dirpath) / name)
+                now = time.monotonic()
+                if now - last_emit >= 0.1:
+                    self.scan_progress.emit(len(found))
+                    last_emit = now
+            found.sort()
         except Exception as exc:  # noqa: BLE001 - report to the UI, don't die silently
             self.scan_error.emit(str(exc))
             return
-        self.scan_finished.emit(files)
+        self.scan_finished.emit(found)
 
 
 class LibraryStatsWorker(QThread):
@@ -1309,15 +1321,20 @@ class MainWindow(QMainWindow):
         self.start_button.setEnabled(False)
         self.checkonly_button.setEnabled(False)
         self.status_label.setText(f"Scanning {folder} for FLAC files...")
+        self.overall_bar.setRange(0, 0)  # busy pulse - total unknown until scan finishes
 
         if self.folder_scan_worker is not None:
             self.folder_scan_worker.quit()
             self.folder_scan_worker.wait()
 
         self.folder_scan_worker = FolderScanWorker(folder)
+        self.folder_scan_worker.scan_progress.connect(self._on_folder_scan_progress)
         self.folder_scan_worker.scan_finished.connect(lambda files: self._on_folder_scanned(folder, files))
         self.folder_scan_worker.scan_error.connect(self._on_folder_scan_error)
         self.folder_scan_worker.start()
+
+    def _on_folder_scan_progress(self, count: int) -> None:
+        self.status_label.setText(f"Scanning... {count} FLAC file(s) found so far")
 
     def _on_folder_scanned(self, folder: Path, files: list[Path]) -> None:
         self.files = files
@@ -1335,6 +1352,7 @@ class MainWindow(QMainWindow):
             self.status_label.setText(f"No .flac files found under {folder}")
 
     def _on_folder_scan_error(self, message: str) -> None:
+        self.overall_bar.setRange(0, 1)
         self.status_label.setText(f"Scan failed: {message}")
 
     def _populate_table(self, files: list[Path]) -> None:
