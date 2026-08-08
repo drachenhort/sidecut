@@ -138,9 +138,26 @@ class BatchConverter(QThread):
         self.acoustid_autocorrect = acoustid_autocorrect and not acoustid_only
         self.acoustid_fill_release_type = acoustid_autocorrect
         self._cancel_event = threading.Event()
+        self._stop_after_folder_event = threading.Event()
+        self._started_lock = threading.Lock()
+        self._started_folders: set[Path] = set()
 
     def cancel(self) -> None:
         self._cancel_event.set()
+
+    def stop_after_current_folder(self) -> None:
+        """Soft-cancel: let every file whose folder already has a file
+        in-flight run to completion, but skip files from folders that
+        haven't started yet."""
+        self._stop_after_folder_event.set()
+
+    def _should_cancel(self, index: int) -> bool:
+        if self._cancel_event.is_set():
+            return True
+        if self._stop_after_folder_event.is_set():
+            with self._started_lock:
+                return self.files[index].parent not in self._started_folders
+        return False
 
     def _check_acoustid(self, index: int, path: Path, log) -> core.AcoustIDCheck:
         result = core.check_acoustid(path, self.acoustid_apikey)
@@ -155,6 +172,13 @@ class BatchConverter(QThread):
         return result
 
     def _convert(self, index: int, path: Path, log) -> core.ConversionResult:
+        if self._should_cancel(index):
+            self.file_finished.emit(index, False)
+            return core.ConversionResult(path, False)
+
+        with self._started_lock:
+            self._started_folders.add(path.parent)
+
         if self.acoustid_only:
             self.file_started.emit(index)
             result = self._check_acoustid(index, path, log)
@@ -166,8 +190,9 @@ class BatchConverter(QThread):
             self._check_acoustid(index, path, log)
         self.file_started.emit(index)
         on_progress = lambda p: self.file_progress.emit(index, p.percent, p.speed)  # noqa: E731
+        should_cancel = lambda: self._should_cancel(index)  # noqa: E731
         result = core.convert_one(
-            path, self.quality_args, log, on_progress=on_progress, should_cancel=self._cancel_event.is_set
+            path, self.quality_args, log, on_progress=on_progress, should_cancel=should_cancel
         )
         self.file_finished.emit(index, result.ok)
         return result
@@ -1059,6 +1084,7 @@ class MainWindow(QMainWindow):
         self.queue_window: LidarrQueueWindow | None = None
         self.settings = QSettings("AcoustID", "AcoustID")
         self._acoustid_only_run = False
+        self._import_to_lidarr_on_cancel = False
 
         self._build_ui()
         folder = initial_folder or self._last_folder()
@@ -1635,6 +1661,7 @@ class MainWindow(QMainWindow):
         self.cancel_button.setEnabled(True)
         self._completed = 0
         self._batch_total = len(files)
+        self._import_to_lidarr_on_cancel = False
 
         self.converter = BatchConverter(
             files,
@@ -1654,10 +1681,30 @@ class MainWindow(QMainWindow):
         self.converter.start()
 
     def _cancel_conversion(self) -> None:
-        if self.converter is not None:
-            self.converter.cancel()
+        if self.converter is None:
+            return
+
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Cancel Conversion")
+        dialog.setText("What do you want to do?")
+        stop_import_button = dialog.addButton("Stop Now && Import to Lidarr", QMessageBox.AcceptRole)
+        finish_folder_button = dialog.addButton("Finish Current Folder, Then Stop", QMessageBox.AcceptRole)
+        keep_going_button = dialog.addButton("Keep Converting", QMessageBox.RejectRole)
+        dialog.setDefaultButton(keep_going_button)
+        dialog.exec()
+        clicked = dialog.clickedButton()
+
+        if clicked is keep_going_button:
+            return
+
         self.cancel_button.setEnabled(False)
-        self.status_label.setText("Cancelling after in-flight files finish...")
+        if clicked is stop_import_button:
+            self._import_to_lidarr_on_cancel = True
+            self.converter.cancel()
+            self.status_label.setText("Cancelling after in-flight files finish...")
+        elif clicked is finish_folder_button:
+            self.converter.stop_after_current_folder()
+            self.status_label.setText("Finishing the current folder, then stopping...")
 
     def _on_file_started(self, row: int) -> None:
         label = "checking" if self._acoustid_only_run else "running"
@@ -1718,6 +1765,12 @@ class MainWindow(QMainWindow):
         self.checkonly_button.setEnabled(False)
         self.status_label.setText(f"Converted: {ok_count}  Failed: {fail_count}  Log: {log_path}")
 
+        if self._import_to_lidarr_on_cancel:
+            self._import_to_lidarr_on_cancel = False
+            if ok_count:
+                self._start_lidarr_import()
+            return
+
         if ok_count:
             saved = src_bytes - dst_bytes
             percent = (saved / src_bytes * 100) if src_bytes else 0.0
@@ -1733,6 +1786,7 @@ class MainWindow(QMainWindow):
             self._maybe_autoimport_to_lidarr()
 
     def _on_batch_error(self, message: str) -> None:
+        self._import_to_lidarr_on_cancel = False
         self.start_button.setEnabled(bool(self.files))
         self.checkonly_button.setEnabled(bool(self.files))
         self.checkonly_mp3_button.setEnabled(bool(self.folder_edit.text()))
