@@ -536,6 +536,26 @@ class LidarrSettingsDialog(QDialog):
         super().accept()
 
 
+class FolderScanWorker(QThread):
+    """Walks the folder for .flac files off the UI thread - a large library
+    (thousands of files) makes a synchronous rglob() freeze the window."""
+
+    scan_finished = Signal(object)  # list[Path]
+    scan_error = Signal(str)
+
+    def __init__(self, folder: Path) -> None:
+        super().__init__()
+        self.folder = folder
+
+    def run(self) -> None:
+        try:
+            files = core.find_flac_files(self.folder)
+        except Exception as exc:  # noqa: BLE001 - report to the UI, don't die silently
+            self.scan_error.emit(str(exc))
+            return
+        self.scan_finished.emit(files)
+
+
 class LibraryStatsWorker(QThread):
     """Runs library_stats.scan_release_types()/scan_release_provenance() off
     the UI thread, since walking and tag-reading a whole library can take a
@@ -1010,6 +1030,7 @@ class MainWindow(QMainWindow):
         self.lidarr_worker: LidarrImportWorker | None = None
         self.lidarr_force_reimport_plan_worker: LidarrForceReimportPlanWorker | None = None
         self.lidarr_log_window: LidarrImportLogWindow | None = None
+        self.folder_scan_worker: FolderScanWorker | None = None
         self.library_stats_worker: LibraryStatsWorker | None = None
         self.library_stats_window: LibraryStatsWindow | None = None
         self.declutter_scan_worker: DeclutterScanWorker | None = None
@@ -1283,7 +1304,23 @@ class MainWindow(QMainWindow):
     def _set_folder(self, folder: Path) -> None:
         self.folder_edit.setText(str(folder))
         self.settings.setValue("last_folder", str(folder))
-        self.files = core.find_flac_files(folder)
+        self.files = []
+        self.table.setRowCount(0)
+        self.start_button.setEnabled(False)
+        self.checkonly_button.setEnabled(False)
+        self.status_label.setText(f"Scanning {folder} for FLAC files...")
+
+        if self.folder_scan_worker is not None:
+            self.folder_scan_worker.quit()
+            self.folder_scan_worker.wait()
+
+        self.folder_scan_worker = FolderScanWorker(folder)
+        self.folder_scan_worker.scan_finished.connect(lambda files: self._on_folder_scanned(folder, files))
+        self.folder_scan_worker.scan_error.connect(self._on_folder_scan_error)
+        self.folder_scan_worker.start()
+
+    def _on_folder_scanned(self, folder: Path, files: list[Path]) -> None:
+        self.files = files
         self._populate_table(self.files)
         self.start_button.setEnabled(bool(self.files))
         self.checkonly_button.setEnabled(bool(self.files))
@@ -1297,15 +1334,22 @@ class MainWindow(QMainWindow):
         else:
             self.status_label.setText(f"No .flac files found under {folder}")
 
+    def _on_folder_scan_error(self, message: str) -> None:
+        self.status_label.setText(f"Scan failed: {message}")
+
     def _populate_table(self, files: list[Path]) -> None:
-        self.table.setRowCount(len(files))
-        for row, path in enumerate(files):
-            self.table.setItem(row, 0, QTableWidgetItem(path.name))
-            self.table.setItem(row, 1, QTableWidgetItem(STATUS_COLUMN_LABELS["pending"]))
-            bar = QProgressBar()
-            bar.setRange(0, 100)
-            self.table.setCellWidget(row, 2, bar)
-            self.table.setItem(row, 3, QTableWidgetItem("-"))
+        self.table.setUpdatesEnabled(False)
+        try:
+            self.table.setRowCount(len(files))
+            for row, path in enumerate(files):
+                self.table.setItem(row, 0, QTableWidgetItem(path.name))
+                self.table.setItem(row, 1, QTableWidgetItem(STATUS_COLUMN_LABELS["pending"]))
+                bar = QProgressBar()
+                bar.setRange(0, 100)
+                self.table.setCellWidget(row, 2, bar)
+                self.table.setItem(row, 3, QTableWidgetItem("-"))
+        finally:
+            self.table.setUpdatesEnabled(True)
         self.overall_bar.setRange(0, max(1, len(files)))
         self.overall_bar.setValue(0)
 
