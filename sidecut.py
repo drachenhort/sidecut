@@ -542,30 +542,38 @@ class FolderScanWorker(QThread):
     (thousands of files) makes a synchronous rglob() freeze the window."""
 
     scan_progress = Signal(int)  # files found so far
-    scan_finished = Signal(object)  # list[Path]
+    scan_finished = Signal(object, bool)  # list[Path], capped
     scan_error = Signal(str)
 
-    def __init__(self, folder: Path) -> None:
+    def __init__(self, folder: Path, max_files: int | None = None) -> None:
         super().__init__()
         self.folder = folder
+        self.max_files = max_files
 
     def run(self) -> None:
         try:
             found: list[Path] = []
+            capped = False
             last_emit = time.monotonic()
-            for dirpath, _dirnames, filenames in os.walk(self.folder):
+            for dirpath, dirnames, filenames in os.walk(self.folder):
                 for name in filenames:
                     if name.lower().endswith(".flac"):
                         found.append(Path(dirpath) / name)
+                        if self.max_files is not None and len(found) >= self.max_files:
+                            capped = True
+                            break
                 now = time.monotonic()
                 if now - last_emit >= 0.1:
                     self.scan_progress.emit(len(found))
                     last_emit = now
+                if capped:
+                    dirnames.clear()
+                    break
             found.sort()
         except Exception as exc:  # noqa: BLE001 - report to the UI, don't die silently
             self.scan_error.emit(str(exc))
             return
-        self.scan_finished.emit(found)
+        self.scan_finished.emit(found, capped)
 
 
 class LibraryStatsWorker(QThread):
@@ -1140,6 +1148,22 @@ class MainWindow(QMainWindow):
         self.workers_spin.setRange(1, max(1, (os.cpu_count() or 4) * 2))
         self.workers_spin.setValue(min(4, os.cpu_count() or 1))
 
+        self.file_cap_checkbox = QCheckBox("Cap scan at")
+        self.file_cap_checkbox.setToolTip(
+            "Stop scanning once this many .flac files are found, so a huge\n"
+            "library doesn't scan/load indefinitely. Off by default."
+        )
+        self.file_cap_checkbox.setChecked(self.settings.value("file_cap_enabled", "false") == "true")
+        self.file_cap_checkbox.toggled.connect(self._save_file_cap_settings)
+
+        self.file_cap_spin = QSpinBox()
+        self.file_cap_spin.setRange(100, 1_000_000)
+        self.file_cap_spin.setSingleStep(1000)
+        self.file_cap_spin.setValue(int(self.settings.value("file_cap_value", 75000)))
+        self.file_cap_spin.setEnabled(self.file_cap_checkbox.isChecked())
+        self.file_cap_checkbox.toggled.connect(self.file_cap_spin.setEnabled)
+        self.file_cap_spin.valueChanged.connect(self._save_file_cap_settings)
+
         self.start_button = QPushButton("Transcode")
         self.start_button.setEnabled(False)
         self.start_button.clicked.connect(self._start_conversion)
@@ -1152,6 +1176,9 @@ class MainWindow(QMainWindow):
         row.addWidget(self.quality_combo)
         row.addWidget(QLabel("Parallel jobs:"))
         row.addWidget(self.workers_spin)
+        row.addWidget(self.file_cap_checkbox)
+        row.addWidget(self.file_cap_spin)
+        row.addWidget(QLabel("files"))
         row.addStretch(1)
         row.addWidget(self.start_button)
         row.addWidget(self.cancel_button)
@@ -1301,6 +1328,10 @@ class MainWindow(QMainWindow):
     def _save_quality_setting(self) -> None:
         self.settings.setValue("quality", self.quality_combo.currentData())
 
+    def _save_file_cap_settings(self) -> None:
+        self.settings.setValue("file_cap_enabled", "true" if self.file_cap_checkbox.isChecked() else "false")
+        self.settings.setValue("file_cap_value", self.file_cap_spin.value())
+
     def _last_folder(self) -> Path | None:
         last = self.settings.value("last_folder")
         if last and Path(last).is_dir():
@@ -1327,16 +1358,17 @@ class MainWindow(QMainWindow):
             self.folder_scan_worker.quit()
             self.folder_scan_worker.wait()
 
-        self.folder_scan_worker = FolderScanWorker(folder)
+        max_files = self.file_cap_spin.value() if self.file_cap_checkbox.isChecked() else None
+        self.folder_scan_worker = FolderScanWorker(folder, max_files)
         self.folder_scan_worker.scan_progress.connect(self._on_folder_scan_progress)
-        self.folder_scan_worker.scan_finished.connect(lambda files: self._on_folder_scanned(folder, files))
+        self.folder_scan_worker.scan_finished.connect(lambda files, capped: self._on_folder_scanned(folder, files, capped))
         self.folder_scan_worker.scan_error.connect(self._on_folder_scan_error)
         self.folder_scan_worker.start()
 
     def _on_folder_scan_progress(self, count: int) -> None:
         self.status_label.setText(f"Scanning... {count} FLAC file(s) found so far")
 
-    def _on_folder_scanned(self, folder: Path, files: list[Path]) -> None:
+    def _on_folder_scanned(self, folder: Path, files: list[Path], capped: bool) -> None:
         self.files = files
         self._populate_table(self.files)
         self.start_button.setEnabled(bool(self.files))
@@ -1347,7 +1379,8 @@ class MainWindow(QMainWindow):
         self.library_stats_button.setEnabled(True)
         self.sort_declutter_button.setEnabled(True)
         if self.files:
-            self.status_label.setText(f"{len(self.files)} FLAC file(s) found under {folder}")
+            suffix = f" (capped at {len(self.files)}, more may exist)" if capped else ""
+            self.status_label.setText(f"{len(self.files)} FLAC file(s) found under {folder}{suffix}")
         else:
             self.status_label.setText(f"No .flac files found under {folder}")
 
