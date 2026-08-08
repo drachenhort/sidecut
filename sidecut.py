@@ -556,12 +556,13 @@ class FolderScanWorker(QThread):
             capped = False
             last_emit = time.monotonic()
             for dirpath, dirnames, filenames in os.walk(self.folder):
+                # Add every .flac in this folder before checking the cap, so
+                # a capped scan never leaves a subfolder half-included.
                 for name in filenames:
                     if name.lower().endswith(".flac"):
                         found.append(Path(dirpath) / name)
-                        if self.max_files is not None and len(found) >= self.max_files:
-                            capped = True
-                            break
+                if self.max_files is not None and len(found) >= self.max_files:
+                    capped = True
                 now = time.monotonic()
                 if now - last_emit >= 0.1:
                     self.scan_progress.emit(len(found))
