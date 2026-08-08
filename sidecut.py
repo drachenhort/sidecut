@@ -1390,15 +1390,16 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"Scan failed: {message}")
 
     def _populate_table(self, files: list[Path]) -> None:
+        # Progress bars are created lazily (see _on_file_started) - building
+        # one QProgressBar per row here freezes the UI once the list gets
+        # into the tens of thousands of rows.
         self.table.setUpdatesEnabled(False)
         try:
             self.table.setRowCount(len(files))
             for row, path in enumerate(files):
                 self.table.setItem(row, 0, QTableWidgetItem(path.name))
                 self.table.setItem(row, 1, QTableWidgetItem(STATUS_COLUMN_LABELS["pending"]))
-                bar = QProgressBar()
-                bar.setRange(0, 100)
-                self.table.setCellWidget(row, 2, bar)
+                self.table.setItem(row, 2, QTableWidgetItem("-"))
                 self.table.setItem(row, 3, QTableWidgetItem("-"))
         finally:
             self.table.setUpdatesEnabled(True)
@@ -1659,6 +1660,10 @@ class MainWindow(QMainWindow):
     def _on_file_started(self, row: int) -> None:
         label = "checking" if self._acoustid_only_run else "running"
         self.table.item(row, 1).setText(STATUS_COLUMN_LABELS[label])
+        if not isinstance(self.table.cellWidget(row, 2), QProgressBar):
+            bar = QProgressBar()
+            bar.setRange(0, 100)
+            self.table.setCellWidget(row, 2, bar)
 
     def _on_file_progress(self, row: int, percent: float, speed: str) -> None:
         bar = self.table.cellWidget(row, 2)
