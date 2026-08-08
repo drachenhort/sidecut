@@ -4,7 +4,25 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.19]
+
 ### Added
+- Optional cap on how many `.flac` files a single folder scan collects
+  (checkbox + spinbox next to the quality/parallel-jobs controls, on by
+  default at 75000, persisted in settings). The scan always finishes the
+  current subfolder before stopping, so a capped scan never splits an
+  album/subfolder across the cap boundary.
+- Live progress while scanning: the overall progress bar pulses and the
+  status label shows a running "N files found so far" count instead of
+  looking frozen during a big scan.
+
+### Fixed
+- Adding a huge folder (10000+ files) made the window go "not
+  responding": the recursive file scan and the table population (one
+  `QProgressBar` widget built per row) both ran synchronously on the GUI
+  thread. The scan now runs on a background thread, and per-row progress
+  bars are created lazily only once a file actually starts converting
+  instead of ~75000 of them up front.
 - Text-based config file (`~/.config/flac2mp3/config.ini`, see
   `config.ini.example`) for setting the AcoustID/Lidarr API keys on a
   headless/SSH box without launching the GUI. `sidecut.py`'s Settings

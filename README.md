@@ -41,7 +41,12 @@ In the window:
    automatically next time, unless a folder is passed on the command line.
    **Collection Summary** (next to Browse) is unrelated to conversion -
    see below.
-2. Choose a **quality** preset and the number of **parallel jobs**.
+2. Choose a **quality** preset and the number of **parallel jobs**. **Cap
+   scan at** (next to parallel jobs) limits how many `.flac` files a single
+   scan collects - on by default at 75000 so pointing it at a huge library
+   doesn't scan/load indefinitely; the scan always finishes the current
+   subfolder before stopping, so it never splits an album across the cap.
+   Uncheck it to scan without a limit.
 3. Optionally tick **Check AcoustID** to fingerprint each file and compare
    it against MusicBrainz before converting (see below). The AcoustID API
    key is entered via **Settings...**, alongside the Lidarr settings and
