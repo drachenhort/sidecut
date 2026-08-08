@@ -1151,9 +1151,10 @@ class MainWindow(QMainWindow):
         self.file_cap_checkbox = QCheckBox("Cap scan at")
         self.file_cap_checkbox.setToolTip(
             "Stop scanning once this many .flac files are found, so a huge\n"
-            "library doesn't scan/load indefinitely. Off by default."
+            "library doesn't scan/load indefinitely. On by default (75000);\n"
+            "uncheck to scan without a limit."
         )
-        self.file_cap_checkbox.setChecked(self.settings.value("file_cap_enabled", "false") == "true")
+        self.file_cap_checkbox.setChecked(self.settings.value("file_cap_enabled", "true") == "true")
         self.file_cap_checkbox.toggled.connect(self._save_file_cap_settings)
 
         self.file_cap_spin = QSpinBox()
