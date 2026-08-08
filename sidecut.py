@@ -1634,6 +1634,7 @@ class MainWindow(QMainWindow):
         self.checkonly_mp3_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
         self._completed = 0
+        self._batch_total = len(files)
 
         self.converter = BatchConverter(
             files,
@@ -1687,6 +1688,11 @@ class MainWindow(QMainWindow):
         self.table.item(row, 1).setText(STATUS_COLUMN_LABELS[label])
         self._completed += 1
         self.overall_bar.setValue(self._completed)
+        remaining = self._batch_total - self._completed
+        verb = "Checking" if self._acoustid_only_run else "Converting"
+        self.status_label.setText(
+            f"{verb}: {self._completed}/{self._batch_total} done, {remaining} remaining"
+        )
 
     def _on_batch_finished(
         self, ok_count: int, fail_count: int, log_path: str, src_bytes: int, dst_bytes: int
