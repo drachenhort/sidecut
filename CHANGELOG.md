@@ -4,6 +4,37 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.23]
+
+### Added
+- "Import each folder to Lidarr as it finishes" - during a long
+  conversion, hands each folder to Lidarr's Manual Import API as soon as
+  every file in it is done, instead of waiting for the whole batch.
+  Imports run one folder at a time in the background, show a running
+  status line (imported/skipped/folders done/queued), write a
+  per-folder warnings log when files are skipped, and show up in the
+  Lidarr Queue window like any other tracked import command. Off by
+  default; mutually exclusive with "Auto-import after conversion" -
+  turning one on turns the other off, since together they'd import
+  every folder twice.
+
+### Fixed
+- `LidarrImportWorker` only caught `lidarr.LidarrError`; any other
+  exception (network hiccup, unexpected API response, etc.) killed the
+  thread without signaling back, which permanently stalled the
+  incremental-import queue after the first failure with no visible
+  error. Now catches broadly so the thread always reports back.
+- The status column showed "Failed" for every file skipped by a
+  cancel (either cancel option), indistinguishable from a genuine
+  conversion error. Now shows "Cancelled" for those instead.
+- Quitting while a conversion was running showed the same generic "Are
+  you sure you want to quit?" with no indication the conversion would
+  be aborted. Now warns explicitly, and cancels the converter (waiting
+  up to 5s for it to stop) before actually closing, instead of killing
+  the process out from under a running ffmpeg.
+- Conversion log filenames renamed from `acoustid-*.log` to
+  `sidecut-*.log` to match the app's current name.
+
 ## [0.22]
 
 ### Added
