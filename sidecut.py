@@ -70,6 +70,7 @@ STATUS_COLUMN_LABELS = {
     "fail": "Failed",
     "checking": "Checking...",
     "checked": "Checked",
+    "cancelled": "Cancelled",
 }
 
 ACOUSTID_STATUS_LABELS = {
@@ -151,7 +152,7 @@ class SleepInhibitor:
 class BatchConverter(QThread):
     file_started = Signal(int)
     file_progress = Signal(int, float, str)
-    file_finished = Signal(int, bool)
+    file_finished = Signal(int, bool, bool)  # index, ok, cancelled
     acoustid_checked = Signal(int, str, str, bool)
     folder_finished = Signal(object)  # Path - every file under it has been attempted
     batch_finished = Signal(int, int, str, "qint64", "qint64")
@@ -231,8 +232,8 @@ class BatchConverter(QThread):
 
     def _convert(self, index: int, path: Path, log) -> core.ConversionResult:
         if self._should_cancel(index):
-            self.file_finished.emit(index, False)
-            return core.ConversionResult(path, False)
+            self.file_finished.emit(index, False, True)
+            return core.ConversionResult(path, False, "cancelled")
 
         with self._started_lock:
             self._started_folders.add(path.parent)
@@ -240,8 +241,9 @@ class BatchConverter(QThread):
         if self.acoustid_only:
             self.file_started.emit(index)
             result = self._check_acoustid(index, path, log)
-            ok = result.status != "error" and not self._cancel_event.is_set()
-            self.file_finished.emit(index, ok)
+            cancelled = self._cancel_event.is_set()
+            ok = result.status != "error" and not cancelled
+            self.file_finished.emit(index, ok, cancelled and not ok)
             return core.ConversionResult(path, ok)
 
         if self.acoustid_apikey and not self._cancel_event.is_set():
@@ -252,7 +254,7 @@ class BatchConverter(QThread):
         result = core.convert_one(
             path, self.quality_args, log, on_progress=on_progress, should_cancel=should_cancel
         )
-        self.file_finished.emit(index, result.ok)
+        self.file_finished.emit(index, result.ok, not result.ok and result.message == "cancelled")
         return result
 
     class _LockedLog:
@@ -1925,8 +1927,10 @@ class MainWindow(QMainWindow):
         item.setText(f"{label} (fixed)" if corrected else label)
         item.setToolTip(detail)
 
-    def _on_file_finished(self, row: int, ok: bool) -> None:
-        if self._acoustid_only_run:
+    def _on_file_finished(self, row: int, ok: bool, cancelled: bool) -> None:
+        if cancelled:
+            label = "cancelled"
+        elif self._acoustid_only_run:
             label = "checked"
         else:
             label = "ok" if ok else "fail"
