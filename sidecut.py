@@ -153,6 +153,7 @@ class BatchConverter(QThread):
     file_progress = Signal(int, float, str)
     file_finished = Signal(int, bool)
     acoustid_checked = Signal(int, str, str, bool)
+    folder_finished = Signal(object)  # Path - every file under it has been attempted
     batch_finished = Signal(int, int, str, "qint64", "qint64")
     batch_error = Signal(str)
 
@@ -185,6 +186,9 @@ class BatchConverter(QThread):
         self._stop_after_folder_event = threading.Event()
         self._started_lock = threading.Lock()
         self._started_folders: set[Path] = set()
+        self._folder_totals = Counter(f.parent for f in files)
+        self._folder_completed: Counter[Path] = Counter()
+        self._folder_progress_lock = threading.Lock()
 
     def cancel(self) -> None:
         self._cancel_event.set()
@@ -213,6 +217,16 @@ class BatchConverter(QThread):
             log.write(f"AcoustID: {path}: filled missing date/originaldate ({result.date}/{result.originaldate})\n")
         log.write(f"AcoustID [{result.status}]: {path}: {result.detail}\n")
         self.acoustid_checked.emit(index, result.status, result.detail, result.corrected)
+        return result
+
+    def _convert_and_track(self, index: int, path: Path, log) -> core.ConversionResult:
+        result = self._convert(index, path, log)
+        folder = path.parent
+        with self._folder_progress_lock:
+            self._folder_completed[folder] += 1
+            folder_done = self._folder_completed[folder] >= self._folder_totals[folder]
+        if folder_done:
+            self.folder_finished.emit(folder)
         return result
 
     def _convert(self, index: int, path: Path, log) -> core.ConversionResult:
@@ -271,7 +285,7 @@ class BatchConverter(QThread):
 
         with log, ThreadPoolExecutor(self.workers) as pool:
             locked_log = self._LockedLog(log)
-            futures = [pool.submit(self._convert, i, f, locked_log) for i, f in enumerate(self.files)]
+            futures = [pool.submit(self._convert_and_track, i, f, locked_log) for i, f in enumerate(self.files)]
             results = [f.result() for f in futures]
 
         ok_count = sum(r.ok for r in results)
@@ -1130,6 +1144,8 @@ class MainWindow(QMainWindow):
         self._acoustid_only_run = False
         self._import_to_lidarr_on_cancel = False
         self._sleep_inhibitor = SleepInhibitor()
+        self._incremental_import_queue: list[Path] = []
+        self._incremental_import_worker: LidarrImportWorker | None = None
 
         self._build_ui()
         folder = initial_folder or self._last_folder()
@@ -1333,6 +1349,20 @@ class MainWindow(QMainWindow):
             lambda checked: self.settings.setValue("lidarr_autoimport", checked)
         )
 
+        self.lidarr_incremental_import_checkbox = QCheckBox("Import each folder to Lidarr as it finishes")
+        self.lidarr_incremental_import_checkbox.setToolTip(
+            "During a long conversion, hand each folder to Lidarr's Manual Import API as\n"
+            "soon as every file in it is done converting - instead of waiting for the whole\n"
+            "batch. Imports run one folder at a time in the background. Off by default;\n"
+            "needs a URL and API key set in Settings..., otherwise silently skipped."
+        )
+        self.lidarr_incremental_import_checkbox.setChecked(
+            self.settings.value("lidarr_incremental_import", False, type=bool)
+        )
+        self.lidarr_incremental_import_checkbox.toggled.connect(
+            lambda checked: self.settings.setValue("lidarr_incremental_import", checked)
+        )
+
         settings_button = QPushButton("Settings...")
         settings_button.clicked.connect(self._open_lidarr_settings)
 
@@ -1367,6 +1397,7 @@ class MainWindow(QMainWindow):
         queue_button.clicked.connect(self._show_lidarr_queue)
 
         row.addWidget(self.lidarr_autoimport_checkbox)
+        row.addWidget(self.lidarr_incremental_import_checkbox)
         row.addStretch(1)
         row.addWidget(settings_button)
         row.addWidget(queue_button)
@@ -1705,6 +1736,42 @@ class MainWindow(QMainWindow):
             return
         self._start_lidarr_import()
 
+    def _on_folder_converted(self, folder: Path) -> None:
+        """Called as each folder finishes converting, mid-batch. Queues an
+        incremental Lidarr import for it if enabled - runs one folder at a
+        time in the background, entirely separate from the manual Import
+        to Lidarr button/checkbox."""
+        if self._acoustid_only_run or not self.lidarr_incremental_import_checkbox.isChecked():
+            return
+        if not self.settings.value("lidarr_url", "") or not self.settings.value("lidarr_api_key", ""):
+            return
+        self._incremental_import_queue.append(folder)
+        self._maybe_start_next_incremental_import()
+
+    def _maybe_start_next_incremental_import(self) -> None:
+        if self._incremental_import_worker is not None or not self._incremental_import_queue:
+            return
+        folder = self._incremental_import_queue.pop(0)
+        base_url = self.settings.value("lidarr_url", "")
+        api_key = self.settings.value("lidarr_api_key", "")
+        local_root = self.settings.value("lidarr_local_root", "")
+        lidarr_root = self.settings.value("lidarr_root", "")
+
+        self._incremental_import_worker = LidarrImportWorker(
+            base_url, api_key, folder, local_root, lidarr_root, force=False
+        )
+        self._incremental_import_worker.import_finished.connect(self._on_incremental_import_finished)
+        self._incremental_import_worker.import_error.connect(self._on_incremental_import_error)
+        self._incremental_import_worker.start()
+
+    def _on_incremental_import_finished(self, imported: int, skipped: int, skipped_names: list[str]) -> None:
+        self._incremental_import_worker = None
+        self._maybe_start_next_incremental_import()
+
+    def _on_incremental_import_error(self, message: str) -> None:
+        self._incremental_import_worker = None
+        self._maybe_start_next_incremental_import()
+
     def _run_batch(
         self, files: list[Path], acoustid_apikey: str | None, acoustid_only: bool, log_prefix: str
     ) -> None:
@@ -1722,6 +1789,7 @@ class MainWindow(QMainWindow):
         self._completed = 0
         self._batch_total = len(files)
         self._import_to_lidarr_on_cancel = False
+        self._incremental_import_queue = []
 
         self.converter = BatchConverter(
             files,
@@ -1736,6 +1804,7 @@ class MainWindow(QMainWindow):
         self.converter.file_progress.connect(self._on_file_progress)
         self.converter.file_finished.connect(self._on_file_finished)
         self.converter.acoustid_checked.connect(self._on_acoustid_checked)
+        self.converter.folder_finished.connect(self._on_folder_converted)
         self.converter.batch_finished.connect(self._on_batch_finished)
         self.converter.batch_error.connect(self._on_batch_error)
         self._sleep_inhibitor.acquire(f"Converting {len(files)} audio file(s)")
