@@ -107,9 +107,11 @@ def _skip_reason_counts(entries: list[str]) -> Counter[str]:
 
 
 class SleepInhibitor:
-    """Holds a systemd-logind sleep/idle inhibitor lock for the duration of
-    a batch, so a long unattended conversion doesn't get interrupted by the
-    machine suspending. No-op (and silent) if systemd-inhibit isn't
+    """Holds a systemd-logind sleep inhibitor lock for the duration of a
+    batch, so a long unattended conversion doesn't get interrupted by the
+    machine suspending/hibernating. Screen blanking/screensaver is a
+    separate mechanism (DPMS/compositor) and stays unaffected. No-op (and
+    silent) if systemd-inhibit isn't
     available, e.g. non-systemd or headless/container setups."""
 
     def __init__(self) -> None:
@@ -122,7 +124,7 @@ class SleepInhibitor:
             self._proc = subprocess.Popen(
                 [
                     "systemd-inhibit",
-                    "--what=sleep:idle",
+                    "--what=sleep",
                     "--who=Sidecut",
                     f"--why={reason}",
                     "--mode=block",
