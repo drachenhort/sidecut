@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.24]
+
+### Fixed
+- Incremental-import status said "N queued", which read like Lidarr's
+  own download Queue window. Reworded to "N folder(s) waiting to be
+  handed to Lidarr" to make clear it's Sidecut's own internal queue.
+
 ## [0.23]
 
 ### Added
