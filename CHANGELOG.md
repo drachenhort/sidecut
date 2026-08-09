@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.22]
+
+### Added
+- **Rescan** button next to the file-cap controls, so changing the cap
+  checkbox/spinbox and re-scanning the current folder doesn't require
+  Browse-ing to it again.
+
 ## [0.21]
 
 ### Added
