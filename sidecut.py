@@ -1433,18 +1433,31 @@ class MainWindow(QMainWindow):
         return row
 
     def closeEvent(self, event: Any) -> None:
+        converting = self.converter is not None and self.converter.isRunning()
+        if converting:
+            question = (
+                "A conversion is still running. Quitting now cancels it: the file\n"
+                "currently in progress may be left incomplete, and any files not yet\n"
+                "started are skipped.\n\nAre you sure you want to quit?"
+            )
+        else:
+            question = "Are you sure you want to quit?"
         reply = QMessageBox.question(
             self,
             "Quit Sidecut",
-            "Are you sure you want to quit?",
+            question,
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
-        if reply == QMessageBox.Yes:
-            self._sleep_inhibitor.release()
-            event.accept()
-        else:
+        if reply != QMessageBox.Yes:
             event.ignore()
+            return
+
+        if converting:
+            self.converter.cancel()
+            self.converter.wait(5000)
+        self._sleep_inhibitor.release()
+        event.accept()
 
     def _open_lidarr_settings(self) -> None:
         LidarrSettingsDialog(self.settings, self).exec()
