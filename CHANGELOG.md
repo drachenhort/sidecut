@@ -4,6 +4,20 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.21]
+
+### Added
+- **Cancel** now opens a 3-way choice instead of stopping immediately:
+  "Stop Now & Import to Lidarr" (hard cancel, then runs the Lidarr manual
+  import once the batch settles), "Finish Current Folder, Then Stop"
+  (soft-cancel - lets any folder that already has a file in-flight
+  finish, skips folders that haven't started yet), or "Keep Converting".
+- The machine no longer suspends/hibernates while a Transcode/Check-only
+  batch is running (via `systemd-inhibit --what=sleep`, released when the
+  batch finishes, errors, or the window closes). Screen blanking/
+  screensaver/DPMS is a separate mechanism and is unaffected - the
+  monitor can still turn off. No-op if `systemd-inhibit` isn't available.
+
 ## [0.20]
 
 ### Added
