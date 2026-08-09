@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.25]
+
+### Added
+- Live running size/savings counter during conversion: "So far: X -> Y
+  (saved Z, N%)", updating after every successful file.
+- Live ETA during conversion/check: extrapolates from average
+  time-per-file-so-far * files remaining, shown as ", ETA 1h 23m" on
+  the status line. Refines as more files complete.
+
 ## [0.24]
 
 ### Fixed
