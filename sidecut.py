@@ -16,6 +16,8 @@ if "--configure" in sys.argv[1:]:
 
 import os
 import re
+import shutil
+import subprocess
 import threading
 import time
 from collections import Counter
@@ -102,6 +104,46 @@ def _skip_reason_counts(entries: list[str]) -> Counter[str]:
     """Count "filename: reason" entries (as produced by
     lidarr.import_folder's skipped_names) by normalized reason category."""
     return Counter(_categorize_skip_reason(entry.split(": ", 1)[1] if ": " in entry else entry) for entry in entries)
+
+
+class SleepInhibitor:
+    """Holds a systemd-logind sleep/idle inhibitor lock for the duration of
+    a batch, so a long unattended conversion doesn't get interrupted by the
+    machine suspending. No-op (and silent) if systemd-inhibit isn't
+    available, e.g. non-systemd or headless/container setups."""
+
+    def __init__(self) -> None:
+        self._proc: subprocess.Popen | None = None
+
+    def acquire(self, reason: str) -> None:
+        if self._proc is not None or shutil.which("systemd-inhibit") is None:
+            return
+        try:
+            self._proc = subprocess.Popen(
+                [
+                    "systemd-inhibit",
+                    "--what=sleep:idle",
+                    "--who=Sidecut",
+                    f"--why={reason}",
+                    "--mode=block",
+                    "cat",
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            self._proc = None
+
+    def release(self) -> None:
+        if self._proc is None:
+            return
+        self._proc.terminate()
+        try:
+            self._proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            self._proc.kill()
+        self._proc = None
 
 
 class BatchConverter(QThread):
@@ -1085,6 +1127,7 @@ class MainWindow(QMainWindow):
         self.settings = QSettings("AcoustID", "AcoustID")
         self._acoustid_only_run = False
         self._import_to_lidarr_on_cancel = False
+        self._sleep_inhibitor = SleepInhibitor()
 
         self._build_ui()
         folder = initial_folder or self._last_folder()
@@ -1332,6 +1375,7 @@ class MainWindow(QMainWindow):
             QMessageBox.No,
         )
         if reply == QMessageBox.Yes:
+            self._sleep_inhibitor.release()
             event.accept()
         else:
             event.ignore()
@@ -1678,6 +1722,7 @@ class MainWindow(QMainWindow):
         self.converter.acoustid_checked.connect(self._on_acoustid_checked)
         self.converter.batch_finished.connect(self._on_batch_finished)
         self.converter.batch_error.connect(self._on_batch_error)
+        self._sleep_inhibitor.acquire(f"Converting {len(files)} audio file(s)")
         self.converter.start()
 
     def _cancel_conversion(self) -> None:
@@ -1744,6 +1789,7 @@ class MainWindow(QMainWindow):
     def _on_batch_finished(
         self, ok_count: int, fail_count: int, log_path: str, src_bytes: int, dst_bytes: int
     ) -> None:
+        self._sleep_inhibitor.release()
         self.cancel_button.setEnabled(False)
         # This rescans the folder fresh each time it's clicked, so it stays
         # usable regardless of what Start/Check-Only just did to self.files.
@@ -1786,6 +1832,7 @@ class MainWindow(QMainWindow):
             self._maybe_autoimport_to_lidarr()
 
     def _on_batch_error(self, message: str) -> None:
+        self._sleep_inhibitor.release()
         self._import_to_lidarr_on_cancel = False
         self.start_button.setEnabled(bool(self.files))
         self.checkonly_button.setEnabled(bool(self.files))
