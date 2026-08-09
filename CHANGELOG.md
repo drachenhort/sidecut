@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.28]
+
+### Fixed
+- Real root cause of the recurring "QThread: Destroyed while thread is
+  still running" crash: the incremental Lidarr-import queue dropped its
+  worker thread's last reference from inside that worker's own
+  finished/error signal handler, racing the OS thread's actual exit.
+  Most of the time harmless, but when the queue emptied out (nothing
+  queued next to paper over the timing) the still-finishing QThread
+  could get destroyed out from under itself, aborting the process. Now
+  waits for the thread to fully finish before dropping the reference.
+
 ## [0.27]
 
 ### Fixed

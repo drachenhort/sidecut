@@ -61,7 +61,7 @@ import lidarr
 import lidarr_hook
 import library_stats
 
-__version__ = "0.27"
+__version__ = "0.28"
 
 STATUS_COLUMN_LABELS = {
     "pending": "Pending",
@@ -1867,6 +1867,8 @@ class MainWindow(QMainWindow):
 
     def _on_incremental_import_finished(self, imported: int, skipped: int, skipped_names: list[str]) -> None:
         folder = self._incremental_import_current_folder
+        if self._incremental_import_worker is not None:
+            self._incremental_import_worker.wait()
         self._incremental_import_worker = None
         self._incremental_import_totals["imported"] += imported
         self._incremental_import_totals["skipped"] += skipped
@@ -1880,6 +1882,8 @@ class MainWindow(QMainWindow):
 
     def _on_incremental_import_error(self, message: str) -> None:
         folder = self._incremental_import_current_folder
+        if self._incremental_import_worker is not None:
+            self._incremental_import_worker.wait()
         self._incremental_import_worker = None
         note = f"{folder.name if folder else 'folder'} failed: {message}"
         self._update_incremental_status_label(note)
