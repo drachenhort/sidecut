@@ -327,7 +327,13 @@ class LidarrForceReimportPlanWorker(QThread):
 class LidarrImportWorker(QThread):
     """Hands a folder to Lidarr's Manual Import API in the background so the
     UI doesn't block on the network round-trip. Entirely independent of
-    BatchConverter/self.files - it just tells Lidarr which folder to scan."""
+    BatchConverter/self.files - it just tells Lidarr which folder to scan.
+
+    run() must always emit either import_finished or import_error, never
+    let an exception kill the thread silently - the incremental-import
+    queue (see MainWindow._maybe_start_next_incremental_import) waits for
+    one of those two signals to move on to the next queued folder, and an
+    unsignaled dead thread stalls it permanently."""
 
     import_finished = Signal(int, int, object)  # imported_count, skipped_count, list[str] skipped names
     import_error = Signal(str)
@@ -373,6 +379,9 @@ class LidarrImportWorker(QThread):
             )
         except lidarr.LidarrError as exc:
             self.import_error.emit(str(exc))
+            return
+        except Exception as exc:  # noqa: BLE001 - must always emit a signal, see class docstring
+            self.import_error.emit(f"unexpected error: {exc}")
             return
         self.import_finished.emit(imported, skipped, skipped_names)
 
