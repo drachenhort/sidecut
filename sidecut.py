@@ -91,6 +91,17 @@ def _format_bytes(num_bytes: int) -> str:
     return f"{size:.1f} GB"
 
 
+def _format_duration(seconds: float) -> str:
+    total = int(seconds)
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
+
 def _categorize_skip_reason(reason: str) -> str:
     """Strip the per-file specifics off a skip reason (our own
     release-mismatch hint, or Lidarr's own "for [/path/...]" suffix) so
@@ -1865,6 +1876,7 @@ class MainWindow(QMainWindow):
         self.cancel_button.setEnabled(True)
         self._completed = 0
         self._batch_total = len(files)
+        self._batch_start_time = time.monotonic()
         self._import_to_lidarr_on_cancel = False
         self._incremental_import_queue = []
         self._incremental_import_totals = {"imported": 0, "skipped": 0, "folders": 0}
@@ -1951,8 +1963,13 @@ class MainWindow(QMainWindow):
         self.overall_bar.setValue(self._completed)
         remaining = self._batch_total - self._completed
         verb = "Checking" if self._acoustid_only_run else "Converting"
+        eta_text = ""
+        if remaining and self._completed:
+            elapsed = time.monotonic() - self._batch_start_time
+            eta_seconds = (elapsed / self._completed) * remaining
+            eta_text = f", ETA {_format_duration(eta_seconds)}"
         self.status_label.setText(
-            f"{verb}: {self._completed}/{self._batch_total} done, {remaining} remaining"
+            f"{verb}: {self._completed}/{self._batch_total} done, {remaining} remaining{eta_text}"
         )
 
         if ok and src_bytes:
