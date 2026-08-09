@@ -1076,6 +1076,11 @@ class DeclutterSortDialog(QDialog):
 
         self.move_worker: DeclutterMoveWorker | None = None
 
+    def closeEvent(self, event: Any) -> None:
+        if self.move_worker is not None and self.move_worker.isRunning():
+            self.move_worker.wait(5000)
+        event.accept()
+
     def _start_move(self) -> None:
         for move, combo in zip(self.moves, self.combo_boxes):
             move.selected = combo.currentText() != KEEP_LABEL
@@ -1477,6 +1482,19 @@ class MainWindow(QMainWindow):
         if converting:
             self.converter.cancel()
             self.converter.wait(5000)
+
+        for worker in (
+            self.lidarr_worker,
+            self.lidarr_force_reimport_plan_worker,
+            self.folder_scan_worker,
+            self.library_stats_worker,
+            self.declutter_scan_worker,
+            self._incremental_import_worker,
+        ):
+            if worker is not None and worker.isRunning():
+                worker.quit()
+                worker.wait(5000)
+
         self._sleep_inhibitor.release()
         event.accept()
 
