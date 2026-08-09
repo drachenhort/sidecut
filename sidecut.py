@@ -1802,6 +1802,7 @@ class MainWindow(QMainWindow):
         )
         self._incremental_import_worker.import_finished.connect(self._on_incremental_import_finished)
         self._incremental_import_worker.import_error.connect(self._on_incremental_import_error)
+        self._incremental_import_worker.command_queued.connect(self._on_lidarr_command_queued)
         self._incremental_import_worker.start()
 
     def _on_incremental_import_finished(self, imported: int, skipped: int, skipped_names: list[str]) -> None:
