@@ -152,7 +152,7 @@ class SleepInhibitor:
 class BatchConverter(QThread):
     file_started = Signal(int)
     file_progress = Signal(int, float, str)
-    file_finished = Signal(int, bool, bool)  # index, ok, cancelled
+    file_finished = Signal(int, bool, bool, "qint64", "qint64")  # index, ok, cancelled, src_bytes, dst_bytes
     acoustid_checked = Signal(int, str, str, bool)
     folder_finished = Signal(object)  # Path - every file under it has been attempted
     batch_finished = Signal(int, int, str, "qint64", "qint64")
@@ -232,7 +232,7 @@ class BatchConverter(QThread):
 
     def _convert(self, index: int, path: Path, log) -> core.ConversionResult:
         if self._should_cancel(index):
-            self.file_finished.emit(index, False, True)
+            self.file_finished.emit(index, False, True, 0, 0)
             return core.ConversionResult(path, False, "cancelled")
 
         with self._started_lock:
@@ -243,7 +243,7 @@ class BatchConverter(QThread):
             result = self._check_acoustid(index, path, log)
             cancelled = self._cancel_event.is_set()
             ok = result.status != "error" and not cancelled
-            self.file_finished.emit(index, ok, cancelled and not ok)
+            self.file_finished.emit(index, ok, cancelled and not ok, 0, 0)
             return core.ConversionResult(path, ok)
 
         if self.acoustid_apikey and not self._cancel_event.is_set():
@@ -254,7 +254,9 @@ class BatchConverter(QThread):
         result = core.convert_one(
             path, self.quality_args, log, on_progress=on_progress, should_cancel=should_cancel
         )
-        self.file_finished.emit(index, result.ok, not result.ok and result.message == "cancelled")
+        self.file_finished.emit(
+            index, result.ok, not result.ok and result.message == "cancelled", result.src_bytes, result.dst_bytes
+        )
         return result
 
     class _LockedLog:
@@ -1159,6 +1161,8 @@ class MainWindow(QMainWindow):
         self._incremental_import_worker: LidarrImportWorker | None = None
         self._incremental_import_current_folder: Path | None = None
         self._incremental_import_totals = {"imported": 0, "skipped": 0, "folders": 0}
+        self._live_src_bytes = 0
+        self._live_dst_bytes = 0
 
         self._build_ui()
         folder = initial_folder or self._last_folder()
@@ -1197,6 +1201,10 @@ class MainWindow(QMainWindow):
 
         self.status_label = QLabel("Choose a folder to scan for FLAC files.")
         layout.addWidget(self.status_label)
+
+        self.savings_label = QLabel("")
+        self.savings_label.setVisible(False)
+        layout.addWidget(self.savings_label)
 
     def _build_folder_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -1861,6 +1869,9 @@ class MainWindow(QMainWindow):
         self._incremental_import_queue = []
         self._incremental_import_totals = {"imported": 0, "skipped": 0, "folders": 0}
         self.lidarr_incremental_status_label.setVisible(False)
+        self._live_src_bytes = 0
+        self._live_dst_bytes = 0
+        self.savings_label.setVisible(False)
 
         self.converter = BatchConverter(
             files,
@@ -1928,7 +1939,7 @@ class MainWindow(QMainWindow):
         item.setText(f"{label} (fixed)" if corrected else label)
         item.setToolTip(detail)
 
-    def _on_file_finished(self, row: int, ok: bool, cancelled: bool) -> None:
+    def _on_file_finished(self, row: int, ok: bool, cancelled: bool, src_bytes: int, dst_bytes: int) -> None:
         if cancelled:
             label = "cancelled"
         elif self._acoustid_only_run:
@@ -1943,6 +1954,17 @@ class MainWindow(QMainWindow):
         self.status_label.setText(
             f"{verb}: {self._completed}/{self._batch_total} done, {remaining} remaining"
         )
+
+        if ok and src_bytes:
+            self._live_src_bytes += src_bytes
+            self._live_dst_bytes += dst_bytes
+            saved = self._live_src_bytes - self._live_dst_bytes
+            percent = (saved / self._live_src_bytes * 100) if self._live_src_bytes else 0.0
+            self.savings_label.setText(
+                f"So far: {_format_bytes(self._live_src_bytes)} → {_format_bytes(self._live_dst_bytes)}"
+                f"  (saved {_format_bytes(saved)}, {percent:.0f}%)"
+            )
+            self.savings_label.setVisible(True)
 
     def _on_batch_finished(
         self, ok_count: int, fail_count: int, log_path: str, src_bytes: int, dst_bytes: int
