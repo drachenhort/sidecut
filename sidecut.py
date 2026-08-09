@@ -1795,7 +1795,8 @@ class MainWindow(QMainWindow):
         totals = self._incremental_import_totals
         text = (
             f"Lidarr (incremental): {totals['imported']} imported, {totals['skipped']} skipped "
-            f"across {totals['folders']} folder(s), {len(self._incremental_import_queue)} queued"
+            f"across {totals['folders']} folder(s), {len(self._incremental_import_queue)} folder(s) "
+            "waiting to be handed to Lidarr"
         )
         if note:
             text += f" - {note}"
