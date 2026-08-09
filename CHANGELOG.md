@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.26]
+
+### Fixed
+- App could crash on quit ("QThread: Destroyed while thread is still
+  running", SIGABRT) if a folder scan, library-stats scan, declutter
+  scan/move, or Lidarr import worker was still running when the window
+  closed. All background workers are now waited on before the window
+  tears down.
+
 ## [0.25]
 
 ### Added
