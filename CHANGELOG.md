@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.27]
+
+### Fixed
+- Same "QThread: Destroyed while thread is still running" crash could
+  still happen on quit if the Lidarr Queue window had ever been opened:
+  its polling timer and worker threads kept running as a child of the
+  main window and weren't waited on when the main window closed. Now
+  stopped and waited on too.
+
 ## [0.26]
 
 ### Fixed

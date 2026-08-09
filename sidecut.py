@@ -61,7 +61,7 @@ import lidarr
 import lidarr_hook
 import library_stats
 
-__version__ = "0.26"
+__version__ = "0.27"
 
 STATUS_COLUMN_LABELS = {
     "pending": "Pending",
@@ -1482,6 +1482,13 @@ class MainWindow(QMainWindow):
         if converting:
             self.converter.cancel()
             self.converter.wait(5000)
+
+        if self.queue_window is not None:
+            self.queue_window.timer.stop()
+            if self.queue_window.worker is not None:
+                self.queue_window.worker.wait(5000)
+            if self.queue_window.commands_worker is not None:
+                self.queue_window.commands_worker.wait(5000)
 
         for worker in (
             self.lidarr_worker,
