@@ -1237,6 +1237,11 @@ class MainWindow(QMainWindow):
         self.file_cap_checkbox.toggled.connect(self.file_cap_spin.setEnabled)
         self.file_cap_spin.valueChanged.connect(self._save_file_cap_settings)
 
+        self.rescan_button = QPushButton("Rescan")
+        self.rescan_button.setToolTip("Re-scan the current folder, e.g. after changing the file cap.")
+        self.rescan_button.setEnabled(False)
+        self.rescan_button.clicked.connect(self._rescan_folder)
+
         self.start_button = QPushButton("Transcode")
         self.start_button.setEnabled(False)
         self.start_button.clicked.connect(self._start_conversion)
@@ -1252,6 +1257,7 @@ class MainWindow(QMainWindow):
         row.addWidget(self.file_cap_checkbox)
         row.addWidget(self.file_cap_spin)
         row.addWidget(QLabel("files"))
+        row.addWidget(self.rescan_button)
         row.addStretch(1)
         row.addWidget(self.start_button)
         row.addWidget(self.cancel_button)
@@ -1418,6 +1424,11 @@ class MainWindow(QMainWindow):
         if chosen:
             self._set_folder(Path(chosen))
 
+    def _rescan_folder(self) -> None:
+        folder_text = self.folder_edit.text()
+        if folder_text:
+            self._set_folder(Path(folder_text))
+
     def _set_folder(self, folder: Path) -> None:
         self.folder_edit.setText(str(folder))
         self.settings.setValue("last_folder", str(folder))
@@ -1425,6 +1436,7 @@ class MainWindow(QMainWindow):
         self.table.setRowCount(0)
         self.start_button.setEnabled(False)
         self.checkonly_button.setEnabled(False)
+        self.rescan_button.setEnabled(False)
         self.status_label.setText(f"Scanning {folder} for FLAC files...")
         self.overall_bar.setRange(0, 0)  # busy pulse - total unknown until scan finishes
 
@@ -1447,6 +1459,7 @@ class MainWindow(QMainWindow):
         self._populate_table(self.files)
         self.start_button.setEnabled(bool(self.files))
         self.checkonly_button.setEnabled(bool(self.files))
+        self.rescan_button.setEnabled(True)
         self.checkonly_mp3_button.setEnabled(True)
         self.lidarr_import_button.setEnabled(True)
         self.lidarr_force_reimport_button.setEnabled(True)
@@ -1460,6 +1473,7 @@ class MainWindow(QMainWindow):
 
     def _on_folder_scan_error(self, message: str) -> None:
         self.overall_bar.setRange(0, 1)
+        self.rescan_button.setEnabled(True)
         self.status_label.setText(f"Scan failed: {message}")
 
     def _populate_table(self, files: list[Path]) -> None:
