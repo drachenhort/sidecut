@@ -364,8 +364,8 @@ restricted like you would any other credentials file.
   else is kept as a `TXXX` frame so nothing is silently dropped.
 - Embedded cover art (front/back covers, etc.) is copied as ID3 `APIC`
   frames.
-- A log file `acoustid-convert-<timestamp>.log` (or
-  `acoustid-check-<timestamp>.log` for an AcoustID-only run) is written in
+- A log file `sidecut-convert-<timestamp>.log` (or
+  `sidecut-check-<timestamp>.log` for an AcoustID-only run) is written in
   the scanned root folder, containing ffmpeg output for any failures.
 - Re-running on the same folder is safe: files that already converted no
   longer have a `.flac` source and are skipped automatically, so an

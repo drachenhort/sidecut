@@ -1155,6 +1155,8 @@ class MainWindow(QMainWindow):
         self._sleep_inhibitor = SleepInhibitor()
         self._incremental_import_queue: list[Path] = []
         self._incremental_import_worker: LidarrImportWorker | None = None
+        self._incremental_import_current_folder: Path | None = None
+        self._incremental_import_totals = {"imported": 0, "skipped": 0, "folders": 0}
 
         self._build_ui()
         folder = initial_folder or self._last_folder()
@@ -1179,6 +1181,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(self._build_options_row())
         layout.addLayout(self._build_acoustid_row())
         layout.addLayout(self._build_lidarr_row())
+        layout.addWidget(self.lidarr_incremental_status_label)
 
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["File", "Status", "Progress", "AcoustID"])
@@ -1339,6 +1342,18 @@ class MainWindow(QMainWindow):
         outer.addLayout(actions_row)
         return outer
 
+    def _on_lidarr_autoimport_toggled(self, checked: bool) -> None:
+        self.settings.setValue("lidarr_autoimport", checked)
+        if checked and self.lidarr_incremental_import_checkbox.isChecked():
+            self.lidarr_incremental_import_checkbox.setChecked(False)
+
+    def _on_lidarr_incremental_toggled(self, checked: bool) -> None:
+        self.settings.setValue("lidarr_incremental_import", checked)
+        if checked and self.lidarr_autoimport_checkbox.isChecked():
+            self.lidarr_autoimport_checkbox.setChecked(False)
+        if not checked:
+            self.lidarr_incremental_status_label.setVisible(False)
+
     def _save_acoustid_settings(self) -> None:
         self.settings.setValue("acoustid_enabled", self.acoustid_checkbox.isChecked())
         self.settings.setValue("acoustid_autocorrect", self.acoustid_autocorrect_checkbox.isChecked())
@@ -1351,26 +1366,25 @@ class MainWindow(QMainWindow):
             "When Start finishes converting at least one file, automatically run the same\n"
             "thing Import to Lidarr does - no extra click needed. Off by default. Only runs\n"
             "after a real conversion (not a Check AcoustID Only/+MP3 run), and only if a URL\n"
-            "and API key are set in Settings...; otherwise it's silently skipped."
+            "and API key are set in Settings...; otherwise it's silently skipped.\n"
+            "Mutually exclusive with \"Import each folder as it finishes\" - see its tooltip."
         )
         self.lidarr_autoimport_checkbox.setChecked(self.settings.value("lidarr_autoimport", False, type=bool))
-        self.lidarr_autoimport_checkbox.toggled.connect(
-            lambda checked: self.settings.setValue("lidarr_autoimport", checked)
-        )
+        self.lidarr_autoimport_checkbox.toggled.connect(self._on_lidarr_autoimport_toggled)
 
         self.lidarr_incremental_import_checkbox = QCheckBox("Import each folder to Lidarr as it finishes")
         self.lidarr_incremental_import_checkbox.setToolTip(
             "During a long conversion, hand each folder to Lidarr's Manual Import API as\n"
             "soon as every file in it is done converting - instead of waiting for the whole\n"
             "batch. Imports run one folder at a time in the background. Off by default;\n"
-            "needs a URL and API key set in Settings..., otherwise silently skipped."
+            "needs a URL and API key set in Settings..., otherwise silently skipped.\n"
+            "Mutually exclusive with \"Auto-import after conversion\": together they'd import\n"
+            "every folder twice (once now, once again as a full-root scan at the end)."
         )
         self.lidarr_incremental_import_checkbox.setChecked(
             self.settings.value("lidarr_incremental_import", False, type=bool)
         )
-        self.lidarr_incremental_import_checkbox.toggled.connect(
-            lambda checked: self.settings.setValue("lidarr_incremental_import", checked)
-        )
+        self.lidarr_incremental_import_checkbox.toggled.connect(self._on_lidarr_incremental_toggled)
 
         settings_button = QPushButton("Settings...")
         settings_button.clicked.connect(self._open_lidarr_settings)
@@ -1412,6 +1426,10 @@ class MainWindow(QMainWindow):
         row.addWidget(queue_button)
         row.addWidget(self.lidarr_import_button)
         row.addWidget(self.lidarr_force_reimport_button)
+
+        self.lidarr_incremental_status_label = QLabel("")
+        self.lidarr_incremental_status_label.setVisible(False)
+
         return row
 
     def closeEvent(self, event: Any) -> None:
@@ -1549,13 +1567,13 @@ class MainWindow(QMainWindow):
             acoustid_apikey = self._require_acoustid_apikey()
             if acoustid_apikey is None:
                 return
-        self._run_batch(self.files, acoustid_apikey, acoustid_only=False, log_prefix="acoustid-convert")
+        self._run_batch(self.files, acoustid_apikey, acoustid_only=False, log_prefix="sidecut-convert")
 
     def _start_acoustid_check_only(self) -> None:
         acoustid_apikey = self._require_acoustid_apikey()
         if acoustid_apikey is None:
             return
-        self._run_batch(self.files, acoustid_apikey, acoustid_only=True, log_prefix="acoustid-check")
+        self._run_batch(self.files, acoustid_apikey, acoustid_only=True, log_prefix="sidecut-check")
 
     def _start_mp3_acoustid_check(self) -> None:
         acoustid_apikey = self._require_acoustid_apikey()
@@ -1569,7 +1587,7 @@ class MainWindow(QMainWindow):
         # Deliberately not stored on self.files: this scan (and its table
         # listing) is scoped to this button only, so Start and Check
         # AcoustID Only keep targeting the folder's FLAC files afterwards.
-        self._run_batch(files, acoustid_apikey, acoustid_only=True, log_prefix="acoustid-check-mp3")
+        self._run_batch(files, acoustid_apikey, acoustid_only=True, log_prefix="sidecut-check-mp3")
 
     def _start_lidarr_import(self) -> None:
         self._run_lidarr_import(force=False)
@@ -1652,7 +1670,7 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"Lidarr import: {imported} imported, {skipped} skipped")
         message = f"Lidarr imported {imported} file(s)."
         if skipped:
-            log_path = self._write_lidarr_warnings_log(skipped, skipped_names)
+            log_path = self._write_lidarr_warnings_log(Path(self.folder_edit.text()), skipped, skipped_names)
             top_reason, top_count = _skip_reason_counts(skipped_names).most_common(1)[0]
             message += (
                 f"\n\n{skipped} file(s) Lidarr couldn't auto-match were left untouched "
@@ -1660,8 +1678,7 @@ class MainWindow(QMainWindow):
             )
         QMessageBox.information(self, "Lidarr import", message)
 
-    def _write_lidarr_warnings_log(self, skipped: int, entries: list[str]) -> Path:
-        folder = Path(self.folder_edit.text())
+    def _write_lidarr_warnings_log(self, folder: Path, skipped: int, entries: list[str]) -> Path:
         log_path = folder / f"lidarr-import-warnings-{datetime.now():%Y%m%d-%H%M%S}.log"
         summary = "\n".join(
             f"  {count}x  {reason}" for reason, count in _skip_reason_counts(entries).most_common()
@@ -1755,16 +1772,30 @@ class MainWindow(QMainWindow):
         if not self.settings.value("lidarr_url", "") or not self.settings.value("lidarr_api_key", ""):
             return
         self._incremental_import_queue.append(folder)
+        self.lidarr_incremental_status_label.setVisible(True)
+        self._update_incremental_status_label()
         self._maybe_start_next_incremental_import()
+
+    def _update_incremental_status_label(self, note: str = "") -> None:
+        totals = self._incremental_import_totals
+        text = (
+            f"Lidarr (incremental): {totals['imported']} imported, {totals['skipped']} skipped "
+            f"across {totals['folders']} folder(s), {len(self._incremental_import_queue)} queued"
+        )
+        if note:
+            text += f" - {note}"
+        self.lidarr_incremental_status_label.setText(text)
 
     def _maybe_start_next_incremental_import(self) -> None:
         if self._incremental_import_worker is not None or not self._incremental_import_queue:
             return
         folder = self._incremental_import_queue.pop(0)
+        self._incremental_import_current_folder = folder
         base_url = self.settings.value("lidarr_url", "")
         api_key = self.settings.value("lidarr_api_key", "")
         local_root = self.settings.value("lidarr_local_root", "")
         lidarr_root = self.settings.value("lidarr_root", "")
+        self._update_incremental_status_label(f"importing {folder.name}...")
 
         self._incremental_import_worker = LidarrImportWorker(
             base_url, api_key, folder, local_root, lidarr_root, force=False
@@ -1774,11 +1805,23 @@ class MainWindow(QMainWindow):
         self._incremental_import_worker.start()
 
     def _on_incremental_import_finished(self, imported: int, skipped: int, skipped_names: list[str]) -> None:
+        folder = self._incremental_import_current_folder
         self._incremental_import_worker = None
+        self._incremental_import_totals["imported"] += imported
+        self._incremental_import_totals["skipped"] += skipped
+        self._incremental_import_totals["folders"] += 1
+        note = ""
+        if skipped and folder is not None:
+            log_path = self._write_lidarr_warnings_log(folder, skipped, skipped_names)
+            note = f"{folder.name}: {skipped} skipped, see {log_path.name}"
+        self._update_incremental_status_label(note)
         self._maybe_start_next_incremental_import()
 
     def _on_incremental_import_error(self, message: str) -> None:
+        folder = self._incremental_import_current_folder
         self._incremental_import_worker = None
+        note = f"{folder.name if folder else 'folder'} failed: {message}"
+        self._update_incremental_status_label(note)
         self._maybe_start_next_incremental_import()
 
     def _run_batch(
@@ -1799,6 +1842,8 @@ class MainWindow(QMainWindow):
         self._batch_total = len(files)
         self._import_to_lidarr_on_cancel = False
         self._incremental_import_queue = []
+        self._incremental_import_totals = {"imported": 0, "skipped": 0, "folders": 0}
+        self.lidarr_incremental_status_label.setVisible(False)
 
         self.converter = BatchConverter(
             files,
