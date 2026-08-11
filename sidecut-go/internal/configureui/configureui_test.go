@@ -50,7 +50,7 @@ func TestFreshConfigPromptsAndSaves(t *testing.T) {
 	dir := withIsolatedConfig(t)
 	checker := func(url, key string) (string, error) { return "1.0", nil }
 
-	code, _ := runWithInput(t, "newkey\nhttp://host:8686\nlidarrkey\ny\n", checker)
+	code, _ := runWithInput(t, "newkey\nhttp://host:8686\nlidarrkey\n\ny\n", checker)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
@@ -68,6 +68,20 @@ func TestFreshConfigPromptsAndSaves(t *testing.T) {
 	}
 }
 
+func TestFFmpegPathIsPromptedAndSaved(t *testing.T) {
+	dir := withIsolatedConfig(t)
+
+	code, _ := runWithInput(t, "\n\n\n/opt/ffmpeg/bin/ffmpeg\ny\n", nil)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	saved := config.ReadFile(filepath.Join(dir, "config.ini"))
+	if saved["ffmpeg_path"] != "/opt/ffmpeg/bin/ffmpeg" {
+		t.Errorf("ffmpeg_path = %q, want /opt/ffmpeg/bin/ffmpeg", saved["ffmpeg_path"])
+	}
+}
+
 func TestBlankAnswersKeepExistingValues(t *testing.T) {
 	dir := withIsolatedConfig(t)
 	path := filepath.Join(dir, "config.ini")
@@ -75,7 +89,7 @@ func TestBlankAnswersKeepExistingValues(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	code, _ := runWithInput(t, "\nhttp://newhost:8686\n\ny\n", nil)
+	code, _ := runWithInput(t, "\nhttp://newhost:8686\n\n\ny\n", nil)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
@@ -91,7 +105,7 @@ func TestBlankAnswersKeepExistingValues(t *testing.T) {
 
 func TestDecliningSaveLeavesFileUntouched(t *testing.T) {
 	dir := withIsolatedConfig(t)
-	code, _ := runWithInput(t, "newkey\n\n\nn\n", nil)
+	code, _ := runWithInput(t, "newkey\n\n\n\nn\n", nil)
 	if code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
@@ -102,7 +116,7 @@ func TestDecliningSaveLeavesFileUntouched(t *testing.T) {
 
 func TestNothingChangedSkipsWrite(t *testing.T) {
 	dir := withIsolatedConfig(t)
-	code, out := runWithInput(t, "\n\n\n", nil)
+	code, out := runWithInput(t, "\n\n\n\n", nil)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
@@ -118,7 +132,7 @@ func TestEnvOverrideSkipsPromptAndIsNotSaved(t *testing.T) {
 	dir := withIsolatedConfig(t)
 	t.Setenv("LIDARR_URL", "http://env:8686")
 
-	code, _ := runWithInput(t, "\nignored-because-env-wins\n\ny\n", nil)
+	code, _ := runWithInput(t, "\nignored-because-env-wins\n\n\ny\n", nil)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
@@ -186,7 +200,7 @@ func TestFailedVerificationDefaultsToNotSaving(t *testing.T) {
 	dir := withIsolatedConfig(t)
 	checker := func(url, key string) (string, error) { return "", errors.New("Lidarr rejected the API key") }
 
-	code, _ := runWithInput(t, "\nhttp://host:8686\nbadkey\n\n", checker)
+	code, _ := runWithInput(t, "\nhttp://host:8686\nbadkey\n\n\n", checker)
 	if code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
@@ -199,7 +213,7 @@ func TestFailedVerificationCanBeOverridden(t *testing.T) {
 	dir := withIsolatedConfig(t)
 	checker := func(url, key string) (string, error) { return "", errors.New("Lidarr rejected the API key") }
 
-	code, _ := runWithInput(t, "\nhttp://host:8686\nbadkey\ny\n", checker)
+	code, _ := runWithInput(t, "\nhttp://host:8686\nbadkey\n\ny\n", checker)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}

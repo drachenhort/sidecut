@@ -9,7 +9,12 @@ tracking, including what's ported, what's deliberately deferred, and why.
 
 - FLAC -> MP3 conversion via `ffmpeg`, with full tag copying (standard
   ID3 frames, MusicBrainz/AcoustID TXXX frames, cover art) matching the
-  same Picard-compatible mapping the Python version uses.
+  same Picard-compatible mapping the Python version uses. `ffmpeg` is
+  looked up on `PATH` by default, or pointed at an explicit binary via
+  the `ffmpeg_path` config field / `FFMPEG_PATH` env var - useful for an
+  ffmpeg build kept outside PATH (a container mount, a static build next
+  to this binary). Not in the Python version, which only ever looks on
+  `PATH`.
 - A headless `config.ini` (script-dir-first, falling back to
   `~/.config/flac2mp3/`, env vars override both) and an interactive
   `--configure` text UI to set it - same file format and precedence

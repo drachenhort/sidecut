@@ -18,18 +18,20 @@ import (
 
 // Fields are the config keys this package knows about, in the order
 // they're written to the file.
-var Fields = []string{"acoustid_api_key", "lidarr_url", "lidarr_api_key"}
+var Fields = []string{"acoustid_api_key", "lidarr_url", "lidarr_api_key", "ffmpeg_path"}
 
 var FieldLabels = map[string]string{
 	"acoustid_api_key": "AcoustID API key",
 	"lidarr_url":       "Lidarr URL",
 	"lidarr_api_key":   "Lidarr API key",
+	"ffmpeg_path":      "ffmpeg path (blank = look up on PATH)",
 }
 
 var EnvVars = map[string]string{
 	"acoustid_api_key": "ACOUSTID_API_KEY",
 	"lidarr_url":       "LIDARR_URL",
 	"lidarr_api_key":   "LIDARR_API_KEY",
+	"ffmpeg_path":      "FFMPEG_PATH",
 }
 
 const section = "flac2mp3"

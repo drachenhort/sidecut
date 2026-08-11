@@ -21,6 +21,10 @@ import (
 )
 
 func main() {
+	if path := config.LoadSettings("")["ffmpeg_path"]; path != "" {
+		core.FFmpegPath = path
+	}
+
 	if hook.IsInvocation() {
 		// Lidarr Custom Script invocation: no terminal to interact with,
 		// so never prompt - just the plain conversion logic.
@@ -73,7 +77,7 @@ func printUsage() {
 // one-line result per file and a summary at the end.
 func runConvert(folder, quality string) int {
 	if !core.CheckFFmpeg() {
-		fmt.Fprintln(os.Stderr, "ffmpeg is required but was not found on PATH.")
+		fmt.Fprintf(os.Stderr, "ffmpeg is required but was not found (looked for %q; set ffmpeg_path via --configure or $FFMPEG_PATH to point at it).\n", core.FFmpegPath)
 		return 1
 	}
 

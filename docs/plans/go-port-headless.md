@@ -200,6 +200,18 @@ verifiable, not just assumed.
       Manually smoke-tested end to end against a real sample FLAC file -
       converts, tags land correctly, matches the Python GUI's Transcode
       output.
+- [x] Configurable `ffmpeg` path - not a port of any Python behavior
+      (`core.py` always looks on `PATH`, no override), added because a
+      headless box may keep `ffmpeg` outside `PATH` (container mount,
+      static build next to the binary). New `ffmpeg_path` config
+      field/`FFMPEG_PATH` env var, following the same file/env
+      precedence as `acoustid_api_key`/`lidarr_*` - blank means "look up
+      `ffmpeg` on PATH" (the old, only, behavior), same as before. A
+      package-level `core.FFmpegPath` var (default `"ffmpeg"`) is what
+      `CheckFFmpeg`/`RunFFmpeg` actually invoke; `cmd/sidecut`'s `main()`
+      sets it from config before dispatching to any subcommand (covers
+      `convert`, `check`, and the Lidarr hook mode, since hook mode calls
+      straight into `core.ConvertOne` too).
 - [x] `sidecut-go/README.md`: build/install instructions, what's ported
       vs not (no GUI yet, no AcoustID check, no Lidarr reimport), how it
       relates to the Python project

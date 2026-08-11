@@ -1,11 +1,5 @@
 // Package core is the Go port of core.py's conversion pipeline: finding
 // FLAC files, shelling out to ffmpeg, and copying tags onto the result.
-//
-// Not yet ported: apply_release_type/apply_release_provenance/
-// correct_acoustid_mismatch, which rewrite a FLAC's own Vorbis comments in
-// place - internal/flactag is read-only today, and those three need a
-// FLAC metadata *writer*, which is its own scoped piece of work (see the
-// plan doc's open questions).
 package core
 
 import (
@@ -35,9 +29,17 @@ var QualityLabels = map[string]string{
 	"cbr320": "320kbps CBR",
 }
 
-// CheckFFmpeg reports whether ffmpeg is on PATH.
+// FFmpegPath is the ffmpeg binary CheckFFmpeg/RunFFmpeg invoke - a bare
+// name ("ffmpeg", the default) resolved via PATH, or an absolute/relative
+// path to a specific binary. cmd/sidecut overrides this from the
+// ffmpeg_path config field/env var at startup, so a build of ffmpeg
+// outside PATH (a container mount, a static build kept next to the
+// binary, ...) can be used without editing PATH itself.
+var FFmpegPath = "ffmpeg"
+
+// CheckFFmpeg reports whether FFmpegPath resolves to a runnable binary.
 func CheckFFmpeg() bool {
-	_, err := exec.LookPath("ffmpeg")
+	_, err := exec.LookPath(FFmpegPath)
 	return err == nil
 }
 
@@ -143,7 +145,7 @@ func RunFFmpeg(
 	args = append(args, qualityArgs...)
 	args = append(args, "-progress", "pipe:1", dst)
 
-	cmd := exec.Command("ffmpeg", args...)
+	cmd := exec.Command(FFmpegPath, args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return false, err
