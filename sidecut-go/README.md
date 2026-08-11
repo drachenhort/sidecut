@@ -22,6 +22,12 @@ tracking, including what's ported, what's deliberately deferred, and why.
   shared box.
 - Lidarr connection testing and a Lidarr Custom Script hook mode
   (reads `lidarr_*` env vars, same as the Python `lidarr_hook.py`).
+- Lidarr's Manual Import API (`internal/lidarr`'s `ImportFolder`/
+  `ForceReimportFolder`): scan a folder, submit Lidarr's auto-matched
+  files, clean up stale TrackFile records this tool's own FLAC->MP3
+  conversions leave behind. Not yet wired into a CLI command or the
+  hook mode, so there's no way to actually invoke it from `sidecut`
+  today - see the plan doc.
 
 ## What this isn't (yet)
 
@@ -32,9 +38,7 @@ MusicBrainz ID are both ported (`internal/acoustid`'s `ApplyReleaseType`/
 `internal/flactag`'s writer) but not yet wired into `sidecut check`/
 `convert` - those commands report AcoustID results without acting on
 them; auto-correcting a tag is an opt-in decision worth its own flag,
-not bundled in silently. Also not yet ported: handing converted files
-off to Lidarr's Manual Import API (the hook mode converts files but
-can't queue the reimport step yet). See the plan doc for why each of
+not bundled in silently. See the plan doc for why each of
 these was scoped out rather than rushed.
 
 ## Build

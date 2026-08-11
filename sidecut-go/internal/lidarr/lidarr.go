@@ -1,12 +1,13 @@
-// Package lidarr is the Go port of lidarr.py's Lidarr REST client.
+// Package lidarr is the Go port of lidarr.py's Lidarr REST client:
+// connection testing, path remapping, the retry/backoff helper everything
+// else builds on, and the Manual Import workflow (see manualimport.go) -
+// scanning a folder for import candidates, submitting matched ones,
+// stale-trackfile cleanup, and force-reimporting a folder Lidarr already
+// has files for.
 //
-// Scoped for this pass to connection testing (what --configure's verify
-// step needs), path remapping, and the retry/backoff helper everything
-// else builds on. Not yet ported: the manual-import workflow
-// (get_manual_import_candidates/submit_manual_import/import_folder),
-// stale-trackfile cleanup, and force_reimport_folder - all straightforward
-// extensions of the same retry+http.Client pattern established here, just
-// deferred for scope (see the plan doc).
+// Not ported: get_metadata_profile_disallowed_types/explain_missing_album,
+// a best-effort diagnostic for *why* an album didn't sync into Lidarr's
+// library in the first place - see manualimport.go's doc comment.
 package lidarr
 
 import (

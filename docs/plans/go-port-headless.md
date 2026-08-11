@@ -177,15 +177,45 @@ verifiable, not just assumed.
       Mirrors mutagen's `FLAC(path)[key] = [value]; tags.save()`, which
       is all `apply_release_type`/`apply_release_provenance`/
       `correct_acoustid_mismatch` ever do to a FLAC.
-- [x] `internal/lidarr` (partial): retry/backoff (`withRetry`),
-      `CheckConnection`, `RemapPathToLidarr`/`LidarrPathToLocal`,
-      `DeleteTrackfile`, `GetQueue` - ported the matching
-      `tests/test_lidarr.py` cases (all against `httptest.Server`, no
-      real network). **Not yet ported**: the manual-import workflow
-      (`get_manual_import_candidates`/`submit_manual_import`/
-      `import_folder`/`force_reimport_folder`, stale-trackfile cleanup)
-      - same retry+`http.Client` pattern already established here, just
-      a lot of surface area; deferred for scope.
+- [x] `internal/lidarr`: retry/backoff (`withRetry`), `CheckConnection`,
+      `RemapPathToLidarr`/`LidarrPathToLocal`, `DeleteTrackfile`,
+      `GetQueue` - ported the matching `tests/test_lidarr.py` cases (all
+      against `httptest.Server`, no real network).
+- [x] `internal/lidarr`'s Manual Import workflow (`manualimport.go`):
+      `GetArtistIDForPath`, `GetManualImportCandidates`,
+      `IsFullyMatched`/`SkipReason`/`HasExistingFileRejection`/
+      `HasMissingAlbumRejection`/`HasMissingTracksRejection`,
+      `SubmitManualImport` (flattens GET's nested artist/album/track
+      objects into POST's flat id fields - forwarding the raw shape
+      silently sends `artistId=0` and the command never leaves
+      "queued"), `GetAlbumTrackfiles`/`GetArtistTrackfiles`,
+      `ClearStaleTrackfiles`/`ClearStaleTrackfilesForArtist` (only ever
+      deletes a record after confirming via a real filesystem check that
+      its file is genuinely gone - the safety net `DELETE
+      /api/v1/trackfile` deletes the actual file, not just the database
+      row), `GetCommand`/`WaitForCommand` (two separate timeout budgets:
+      queued-but-not-yet-started vs. actually running), `ImportFolder`
+      (resolves the artist up front so Lidarr never has to guess it from
+      the folder name, proactively clears the artist's stale trackfiles
+      before scanning since even one can crash the whole scan rather
+      than being cleanly rejected, submits matched files in
+      `ImportBatchSize` chunks, retries once after clearing
+      "already has file" rejections), `PlanForceReimport` (read-only
+      dry-run) and `ForceReimportFolder` (moves every already-tracked
+      file aside to a holding directory so Lidarr's stale-trackfile
+      cleanup can safely drop just the database record, then moves every
+      file back before the normal import scan runs - restoration always
+      runs, even if the move-aside loop or the trackfile deletion failed
+      partway, mirroring `lidarr.py`'s try/finally). Ported the matching
+      `tests/test_lidarr.py` cases. **Not ported**:
+      `get_metadata_profile_disallowed_types`/`explain_missing_album` -
+      a best-effort diagnostic that enriches a "couldn't find similar
+      album" skip reason with *why* (usually: a real MusicBrainz release
+      excluded by the artist's metadata profile); `ImportFolder` still
+      works without it, a skipped file just keeps Lidarr's own rejection
+      text instead of the friendlier explanation. Not wired into
+      `cmd/sidecut` - no CLI command drives `ImportFolder`/
+      `ForceReimportFolder` yet.
 - [x] `internal/hook`: Lidarr Custom Script env-var mode - ported the
       `tests/test_lidarr_hook.py` cases that don't depend on
       `lidarr.import_folder` (which isn't ported - see above). When
