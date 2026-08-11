@@ -147,19 +147,36 @@ verifiable, not just assumed.
       generic status error, rate limiter shared across calls). Every
       dependency (fpcalc, HTTP client, AcoustID/MusicBrainz URLs) is
       injectable on `Checker` so tests hit `httptest.Server` instead of
-      the real network/binary. **Not yet ported**: `apply_release_type`/
-      `apply_release_provenance`/`correct_acoustid_mismatch` - same as
-      before, these rewrite a FLAC's own Vorbis comments in place and
-      need a FLAC metadata *writer*, which `internal/flactag` doesn't
-      have - so this stays informational-only until that lands.
-      `Checker` is now wired into `cmd/sidecut`: a `sidecut check
-      <file-or-folder>` command, plus an automatic post-conversion check
-      printed after each file in `sidecut convert` when
-      `acoustid_api_key` is configured and `fpcalc` is on PATH (silently
-      skipped, with a one-time warning, if the key is set but `fpcalc`
-      isn't found). Not wired into the Lidarr Custom Script hook mode
-      (`internal/hook`) - `lidarr_hook.py` itself never called
+      the real network/binary. `Checker` is wired into `cmd/sidecut`: a
+      `sidecut check <file-or-folder>` command, plus an automatic
+      post-conversion check printed after each file in `sidecut convert`
+      when `acoustid_api_key` is configured and `fpcalc` is on PATH
+      (silently skipped, with a one-time warning, if the key is set but
+      `fpcalc` isn't found). Not wired into the Lidarr Custom Script hook
+      mode (`internal/hook`) - `lidarr_hook.py` itself never called
       `check_acoustid` either, only `sidecut.py`'s GUI worker did.
+      `ApplyReleaseType`/`ApplyReleaseProvenance`/`CorrectAcoustIDMismatch`
+      are now ported too (`internal/acoustid/apply.go`), on top of
+      `internal/flactag`'s new writer (see below) - ported the matching
+      `tests/test_core.py` cases (writes missing tag, never overwrites an
+      existing one, fills only the missing field of a pair, skips a
+      low-confidence or non-mismatch or recording-id-less correction,
+      `CorrectAcoustIDMismatch` never touches an MP3). **Not yet wired
+      into `cmd/sidecut`**: `sidecut check`/`convert` only report a
+      `Check`, they don't call these three to act on it - that's an
+      opt-in decision (autocorrect rewriting a tag someone might disagree
+      with) worth its own flag design, not bundled into this pass.
+- [x] `internal/flactag` **write support**: `SetComments` rewrites a
+      FLAC's VORBIS_COMMENT block - replacing every value for a given key
+      (case-insensitively) with one new value, appended after the
+      surviving comments - while copying every other metadata block
+      (STREAMINFO, PICTUREs, unknown block types) and the audio data
+      through byte-for-byte unchanged. Always does a full-file rewrite to
+      a temp file + atomic rename, rather than mutagen's in-place-padding
+      trick - simpler and still correct, just marginally more I/O.
+      Mirrors mutagen's `FLAC(path)[key] = [value]; tags.save()`, which
+      is all `apply_release_type`/`apply_release_provenance`/
+      `correct_acoustid_mismatch` ever do to a FLAC.
 - [x] `internal/lidarr` (partial): retry/backoff (`withRetry`),
       `CheckConnection`, `RemapPathToLidarr`/`LidarrPathToLocal`,
       `DeleteTrackfile`, `GetQueue` - ported the matching

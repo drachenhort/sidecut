@@ -39,6 +39,7 @@ type Check struct {
 	RecordingID  string
 	Score        float64
 	HasScore     bool
+	Corrected    bool
 	ReleaseType  string
 	Date         string
 	OriginalDate string

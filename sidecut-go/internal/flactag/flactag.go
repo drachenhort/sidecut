@@ -155,27 +155,37 @@ func parseStreamInfoDuration(body []byte) time.Duration {
 }
 
 func parseVorbisComment(body []byte) ([]Comment, error) {
+	_, comments, err := parseVorbisCommentFull(body)
+	return comments, err
+}
+
+// parseVorbisCommentFull is parseVorbisComment plus the vendor string,
+// which the writer must round-trip unchanged but readers otherwise don't
+// need.
+func parseVorbisCommentFull(body []byte) (vendor string, comments []Comment, err error) {
 	r := &byteReader{b: body}
 	vendorLen, err := r.uint32LE()
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
-	if _, err := r.take(int(vendorLen)); err != nil { // vendor string, unused
-		return nil, err
+	vendorBytes, err := r.take(int(vendorLen))
+	if err != nil {
+		return "", nil, err
 	}
+	vendor = string(vendorBytes)
 	count, err := r.uint32LE()
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
-	comments := make([]Comment, 0, count)
+	comments = make([]Comment, 0, count)
 	for i := uint32(0); i < count; i++ {
 		entryLen, err := r.uint32LE()
 		if err != nil {
-			return nil, err
+			return "", nil, err
 		}
 		entry, err := r.take(int(entryLen))
 		if err != nil {
-			return nil, err
+			return "", nil, err
 		}
 		key, value, ok := splitComment(string(entry))
 		if !ok {
@@ -183,7 +193,7 @@ func parseVorbisComment(body []byte) ([]Comment, error) {
 		}
 		comments = append(comments, Comment{Key: key, Value: value})
 	}
-	return comments, nil
+	return vendor, comments, nil
 }
 
 func splitComment(s string) (key, value string, ok bool) {

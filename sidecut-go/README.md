@@ -20,13 +20,17 @@ tracking, including what's ported, what's deliberately deferred, and why.
 
 ## What this isn't (yet)
 
-No GUI - that's what the Python project's `sidecut.py` is for. Also not
-yet ported: writing release-type/date tags back onto a FLAC or
-auto-correcting a mismatched MusicBrainz ID (both need a FLAC metadata
-writer, so `sidecut check`'s AcoustID results are informational only),
-and handing converted files off to Lidarr's Manual Import API (the hook
-mode converts files but can't queue the reimport step yet). See the plan
-doc for why each of these was scoped out rather than rushed.
+No GUI - that's what the Python project's `sidecut.py` is for. Writing
+release-type/date tags back onto a FLAC and auto-correcting a mismatched
+MusicBrainz ID are both ported (`internal/acoustid`'s `ApplyReleaseType`/
+`ApplyReleaseProvenance`/`CorrectAcoustIDMismatch`, backed by
+`internal/flactag`'s writer) but not yet wired into `sidecut check`/
+`convert` - those commands report AcoustID results without acting on
+them; auto-correcting a tag is an opt-in decision worth its own flag,
+not bundled in silently. Also not yet ported: handing converted files
+off to Lidarr's Manual Import API (the hook mode converts files but
+can't queue the reimport step yet). See the plan doc for why each of
+these was scoped out rather than rushed.
 
 ## Build
 
