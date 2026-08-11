@@ -151,9 +151,15 @@ verifiable, not just assumed.
       `apply_release_provenance`/`correct_acoustid_mismatch` - same as
       before, these rewrite a FLAC's own Vorbis comments in place and
       need a FLAC metadata *writer*, which `internal/flactag` doesn't
-      have. `Checker` isn't wired into `cmd/sidecut` yet either - no
-      `--check-acoustid` flag or hook-mode integration - that's its own
-      pass once the writer exists and autocorrect can actually run.
+      have - so this stays informational-only until that lands.
+      `Checker` is now wired into `cmd/sidecut`: a `sidecut check
+      <file-or-folder>` command, plus an automatic post-conversion check
+      printed after each file in `sidecut convert` when
+      `acoustid_api_key` is configured and `fpcalc` is on PATH (silently
+      skipped, with a one-time warning, if the key is set but `fpcalc`
+      isn't found). Not wired into the Lidarr Custom Script hook mode
+      (`internal/hook`) - `lidarr_hook.py` itself never called
+      `check_acoustid` either, only `sidecut.py`'s GUI worker did.
 - [x] `internal/lidarr` (partial): retry/backoff (`withRetry`),
       `CheckConnection`, `RemapPathToLidarr`/`LidarrPathToLocal`,
       `DeleteTrackfile`, `GetQueue` - ported the matching

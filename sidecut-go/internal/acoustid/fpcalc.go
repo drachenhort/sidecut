@@ -6,6 +6,12 @@ import (
 	"os/exec"
 )
 
+// CheckFpcalc reports whether chromaprint's fpcalc is on PATH.
+func CheckFpcalc() bool {
+	_, err := exec.LookPath("fpcalc")
+	return err == nil
+}
+
 func parseFpcalcOutput(data []byte) (duration int, fingerprint string, err error) {
 	var body struct {
 		Duration    float64 `json:"duration"`

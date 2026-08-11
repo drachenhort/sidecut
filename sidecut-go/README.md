@@ -20,10 +20,10 @@ tracking, including what's ported, what's deliberately deferred, and why.
 
 ## What this isn't (yet)
 
-No GUI - that's what the Python project's `sidecut.py` is for. The
-AcoustID/MusicBrainz fingerprint check is ported (`internal/acoustid`)
-but not yet wired into the CLI. Also not yet ported: writing
-release-type/date tags back onto a FLAC (needs a FLAC metadata writer),
+No GUI - that's what the Python project's `sidecut.py` is for. Also not
+yet ported: writing release-type/date tags back onto a FLAC or
+auto-correcting a mismatched MusicBrainz ID (both need a FLAC metadata
+writer, so `sidecut check`'s AcoustID results are informational only),
 and handing converted files off to Lidarr's Manual Import API (the hook
 mode converts files but can't queue the reimport step yet). See the plan
 doc for why each of these was scoped out rather than rushed.
@@ -38,6 +38,7 @@ go build -o sidecut ./cmd/sidecut
 
 ```bash
 ./sidecut convert /path/to/music/folder [v0|v2|cbr320]   # default: v0
+./sidecut check /path/to/music/file-or-folder             # AcoustID check, no conversion
 ./sidecut --configure                                     # set API keys
 ```
 
