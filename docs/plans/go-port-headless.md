@@ -126,15 +126,34 @@ verifiable, not just assumed.
       (full Picard-compatible frame mapping table, ported from
       `core.py`'s `_STANDARD_FRAME_BUILDERS`/`_FREETEXT_DESCRIPTIONS`) -
       ported the `tests/test_core.py` cases covering these. **Not yet
-      ported**: `check_acoustid`/AcoustID+MusicBrainz HTTP lookups, and
-      `apply_release_type`/`apply_release_provenance`/
-      `correct_acoustid_mismatch` - the latter three rewrite a FLAC's
-      own Vorbis comments in place, which needs a FLAC metadata
-      *writer* (`internal/flactag` is read-only by design, see the
-      spike notes above); the AcoustID/MusicBrainz HTTP logic itself is
-      straightforward but sizeable (`net/http` + JSON, no writer
-      needed) and was deferred for scope, not for a technical reason -
-      pick either back up as its own pass.
+      ported**: `apply_release_type`/`apply_release_provenance`/
+      `correct_acoustid_mismatch` - they rewrite a FLAC's own Vorbis
+      comments in place, which needs a FLAC metadata *writer*
+      (`internal/flactag` is read-only by design, see the spike notes
+      above). `check_acoustid`/AcoustID+MusicBrainz HTTP lookups are now
+      ported, in `internal/acoustid` (see below) rather than `internal/core`.
+- [x] `internal/acoustid`: fingerprint via `fpcalc -json`, AcoustID lookup
+      (`meta=recordings`/`meta=releasegroups`, two requests - the API only
+      honors one meta mode per call), direct MusicBrainz recording lookup
+      for release date/originaldate, and the match/mismatch/identified/
+      no_match/error comparison against the file's existing
+      `musicbrainz_trackid` (FLAC Vorbis comment or MP3 UFID frame) -
+      ported the `tests/test_core.py` `check_acoustid` cases (match,
+      mismatch with/without a linked recording, identified, no_match,
+      release-type/date/originaldate surfacing incl. preferring the
+      release matching a tagged album, provenance keyed off the tagged
+      recording rather than the first linked one, reading tags from an
+      already-converted MP3, API error message surfaced instead of a
+      generic status error, rate limiter shared across calls). Every
+      dependency (fpcalc, HTTP client, AcoustID/MusicBrainz URLs) is
+      injectable on `Checker` so tests hit `httptest.Server` instead of
+      the real network/binary. **Not yet ported**: `apply_release_type`/
+      `apply_release_provenance`/`correct_acoustid_mismatch` - same as
+      before, these rewrite a FLAC's own Vorbis comments in place and
+      need a FLAC metadata *writer*, which `internal/flactag` doesn't
+      have. `Checker` isn't wired into `cmd/sidecut` yet either - no
+      `--check-acoustid` flag or hook-mode integration - that's its own
+      pass once the writer exists and autocorrect can actually run.
 - [x] `internal/lidarr` (partial): retry/backoff (`withRetry`),
       `CheckConnection`, `RemapPathToLidarr`/`LidarrPathToLocal`,
       `DeleteTrackfile`, `GetQueue` - ported the matching

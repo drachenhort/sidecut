@@ -20,12 +20,13 @@ tracking, including what's ported, what's deliberately deferred, and why.
 
 ## What this isn't (yet)
 
-No GUI - that's what the Python project's `sidecut.py` is for. Also not
-yet ported: the AcoustID/MusicBrainz fingerprint check, writing
-release-type/date tags back onto a FLAC, and handing converted files off
-to Lidarr's Manual Import API (the hook mode converts files but can't
-queue the reimport step yet). See the plan doc for why each of these was
-scoped out rather than rushed.
+No GUI - that's what the Python project's `sidecut.py` is for. The
+AcoustID/MusicBrainz fingerprint check is ported (`internal/acoustid`)
+but not yet wired into the CLI. Also not yet ported: writing
+release-type/date tags back onto a FLAC (needs a FLAC metadata writer),
+and handing converted files off to Lidarr's Manual Import API (the hook
+mode converts files but can't queue the reimport step yet). See the plan
+doc for why each of these was scoped out rather than rushed.
 
 ## Build
 
