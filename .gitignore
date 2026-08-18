@@ -6,3 +6,4 @@ acoustid-*.log
 test-flac/
 sidecut-go/config.ini
 sidecut-go/sidecut
+.aider*
