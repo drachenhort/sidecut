@@ -178,6 +178,7 @@ class BatchConverter(QThread):
         acoustid_apikey: str | None = None,
         acoustid_only: bool = False,
         acoustid_autocorrect: bool = False,
+        acoustid_fill_tags: bool = False,
     ) -> None:
         super().__init__()
         self.files = files
@@ -189,11 +190,12 @@ class BatchConverter(QThread):
         # Never rewrite an existing musicbrainz_trackid on a check-only run:
         # "Check AcoustID Only" promises tagged data stays untouched, so
         # this is ignored there. Filling in *missing* release-type/date/
-        # originaldate tags is purely additive (never overwrites anything)
+        # originaldate/tags is purely additive (never overwrites anything)
         # and safe to allow on both check-only buttons - see
         # acoustid_fill_release_type below.
         self.acoustid_autocorrect = acoustid_autocorrect and not acoustid_only
         self.acoustid_fill_release_type = acoustid_autocorrect
+        self.acoustid_fill_tags = acoustid_fill_tags
         self._cancel_event = threading.Event()
         self._stop_after_folder_event = threading.Event()
         self._started_lock = threading.Lock()
@@ -227,6 +229,8 @@ class BatchConverter(QThread):
             log.write(f"AcoustID: {path}: filled missing release type '{result.release_type}'\n")
         if self.acoustid_fill_release_type and core.apply_release_provenance(path, result):
             log.write(f"AcoustID: {path}: filled missing date/originaldate ({result.date}/{result.originaldate})\n")
+        if self.acoustid_fill_tags and core.apply_musicbrainz_tags(path, result):
+            log.write(f"AcoustID: {path}: filled missing tags\n")
         log.write(f"AcoustID [{result.status}]: {path}: {result.detail}\n")
         self.acoustid_checked.emit(index, result.status, result.detail, result.corrected)
         return result
@@ -1341,9 +1345,18 @@ class MainWindow(QMainWindow):
         self.acoustid_autocorrect_checkbox.setChecked(self.settings.value("acoustid_autocorrect", False, type=bool))
         self.acoustid_autocorrect_checkbox.toggled.connect(self._save_acoustid_settings)
 
+        self.acoustid_fill_tags_checkbox = QCheckBox("Fill missing tags from MusicBrainz")
+        self.acoustid_fill_tags_checkbox.setToolTip(
+            "Automatically fills missing Artist, Title, and Album tags from the matched "
+            "MusicBrainz recording. Only writes if the tag is currently empty."
+        )
+        self.acoustid_fill_tags_checkbox.setChecked(self.settings.value("acoustid_fill_tags", False, type=bool))
+        self.acoustid_fill_tags_checkbox.toggled.connect(self._save_acoustid_settings)
+
         config_row.addWidget(self.acoustid_checkbox)
         config_row.addStretch(1)
         config_row.addWidget(self.acoustid_autocorrect_checkbox)
+        config_row.addWidget(self.acoustid_fill_tags_checkbox)
         outer.addLayout(config_row)
 
         actions_row = QHBoxLayout()
@@ -1383,6 +1396,7 @@ class MainWindow(QMainWindow):
     def _save_acoustid_settings(self) -> None:
         self.settings.setValue("acoustid_enabled", self.acoustid_checkbox.isChecked())
         self.settings.setValue("acoustid_autocorrect", self.acoustid_autocorrect_checkbox.isChecked())
+        self.settings.setValue("acoustid_fill_tags", self.acoustid_fill_tags_checkbox.isChecked())
 
     def _build_lidarr_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -1896,6 +1910,7 @@ class MainWindow(QMainWindow):
         quality = self.quality_combo.currentData()
         log_path = folder / f"{log_prefix}-{datetime.now():%Y%m%d-%H%M%S}.log"
         acoustid_autocorrect = self.acoustid_autocorrect_checkbox.isChecked()
+        acoustid_fill_tags = self.acoustid_fill_tags_checkbox.isChecked()
 
         self._acoustid_only_run = acoustid_only
         self._populate_table(files)
@@ -1922,6 +1937,7 @@ class MainWindow(QMainWindow):
             acoustid_apikey,
             acoustid_only,
             acoustid_autocorrect,
+            acoustid_fill_tags,
         )
         self.converter.file_started.connect(self._on_file_started)
         self.converter.file_progress.connect(self._on_file_progress)

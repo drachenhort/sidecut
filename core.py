@@ -202,6 +202,9 @@ class AcoustIDCheck:
     release_type: str | None = None
     date: str | None = None
     originaldate: str | None = None
+    artist: str = ""
+    title: str = ""
+    album: str = ""
 
 
 @dataclass
@@ -386,26 +389,25 @@ def _musicbrainz_lookup_recording(recording_id: str) -> dict:
 
 def _pick_release_provenance(
     releases: list[dict], tagged_album: str = ""
-) -> tuple[str | None, str | None, str | None]:
+) -> tuple[str | None, str | None, str | None, str | None]:
     """Pick one release off a recording's MusicBrainz `releases` list (see
     _musicbrainz_lookup_recording) and return (release_type, date,
-    originaldate): `date` is that release's own release date;
-    `originaldate` is its release-group's first-release-date - the
-    release-group's original release, regardless of which specific
-    pressing this recording came from; `release_type` is "compilation" if
-    the release-group carries that secondary type, else its primary type.
+    originaldate, album): `date` is that release's own release date;
+    `originaldate` is its release-group's first-release-date;
+    `release_type` is "compilation" if the release-group carries that
+    secondary type, else its primary type; `album` is the release title.
     Mirrors _pick_release_type's matching logic: prefer the release whose
     title matches this file's existing `album` tag, otherwise fall back to
     the first release MusicBrainz returns."""
 
-    def extract(release: dict) -> tuple[str | None, str | None, str | None]:
+    def extract(release: dict) -> tuple[str | None, str | None, str | None, str | None]:
         group = release.get("release-group") or {}
         if "Compilation" in (group.get("secondary-types") or []):
             release_type = "compilation"
         else:
             primary_type = group.get("primary-type")
             release_type = primary_type.lower() if primary_type else None
-        return release_type, release.get("date") or None, group.get("first-release-date") or None
+        return release_type, release.get("date") or None, group.get("first-release-date") or None, release.get("title") or None
 
     if tagged_album:
         for release in releases:
@@ -413,22 +415,22 @@ def _pick_release_provenance(
                 return extract(release)
     if releases:
         return extract(releases[0])
-    return None, None, None
+    return None, None, None, None
 
 
 def _lookup_release_provenance(
     recording_id: str | None, tagged_album: str = ""
-) -> tuple[str | None, str | None, str | None]:
-    """Query MusicBrainz for the release type, this release's date, and
-    its release-group's original release date, keyed off a MusicBrainz
-    recording ID (e.g. AcoustIDCheck.recording_id). Never raises: any
-    failure just means no provenance data, not a failed check."""
+) -> tuple[str | None, str | None, str | None, str | None]:
+    """Query MusicBrainz for the release type, this release's date, its
+    release-group's original release date, and the release title (album),
+    keyed off a MusicBrainz recording ID. Never raises: any failure just
+    means no provenance data, not a failed check."""
     if not recording_id:
-        return None, None, None
+        return None, None, None, None
     try:
         data = _musicbrainz_lookup_recording(recording_id)
     except requests.RequestException:
-        return None, None, None
+        return None, None, None, None
     return _pick_release_provenance(data.get("releases") or [], tagged_album)
 
 
@@ -502,6 +504,46 @@ def apply_release_provenance(path: Path, result: AcoustIDCheck) -> bool:
     return False
 
 
+def apply_musicbrainz_tags(path: Path, result: AcoustIDCheck) -> bool:
+    """Fill missing Artist, Title, and Album tags from the matched MusicBrainz
+    recording. Only writes if the tag is currently missing. Returns True if
+    anything was written."""
+    if not result.artist and not result.title and not result.album:
+        return False
+    suffix = path.suffix.lower()
+    if suffix == ".flac":
+        tags = FLAC(path)
+        wrote = False
+        if result.artist and not tags.get("artist"):
+            tags["artist"] = [result.artist]
+            wrote = True
+        if result.title and not tags.get("title"):
+            tags["title"] = [result.title]
+            wrote = True
+        if result.album and not tags.get("album"):
+            tags["album"] = [result.album]
+            wrote = True
+        if wrote:
+            tags.save()
+        return wrote
+    elif suffix == ".mp3":
+        id3 = ID3(path)
+        wrote = False
+        if result.artist and not id3.get("TPE1"):
+            id3.add(TPE1(encoding=3, text=result.artist))
+            wrote = True
+        if result.title and not id3.get("TIT2"):
+            id3.add(TIT2(encoding=3, text=result.title))
+            wrote = True
+        if result.album and not id3.get("TALB"):
+            id3.add(TALB(encoding=3, text=result.album))
+            wrote = True
+        if wrote:
+            id3.save(path, v2_version=3)
+        return wrote
+    return False
+
+
 def check_acoustid(path: Path, api_key: str) -> AcoustIDCheck:
     """Fingerprint `path` with fpcalc, look it up via the AcoustID web service,
     and compare the best match against the file's existing musicbrainz_trackid
@@ -533,6 +575,8 @@ def check_acoustid(path: Path, api_key: str) -> AcoustIDCheck:
         title = recordings[0].get("title", "")
         summary = f"{artist} - {title}".strip(" -")
     else:
+        artist = ""
+        title = ""
         summary = ""
 
     existing_id: str | None = None
@@ -551,7 +595,7 @@ def check_acoustid(path: Path, api_key: str) -> AcoustIDCheck:
     # one in the list, so a "match" result's release-type/date can't end
     # up describing a different recording than the one actually matched.
     provenance_id = existing_id if existing_id in recording_ids else best_id
-    mb_release_type, mb_date, mb_originaldate = _lookup_release_provenance(provenance_id, tagged_album)
+    mb_release_type, mb_date, mb_originaldate, mb_album = _lookup_release_provenance(provenance_id, tagged_album)
     release_type = release_type or mb_release_type
 
     if existing_id:
@@ -559,6 +603,7 @@ def check_acoustid(path: Path, api_key: str) -> AcoustIDCheck:
             return AcoustIDCheck(
                 "match", f"Matches tagged recording (score {score:.2f})", existing_id, score,
                 release_type=release_type, date=mb_date, originaldate=mb_originaldate,
+                artist=artist, title=title, album=mb_album,
             )
         tagged = f"{tagged_artist} - {tagged_title}".strip(" -") or existing_id
         if summary:
@@ -573,15 +618,18 @@ def check_acoustid(path: Path, api_key: str) -> AcoustIDCheck:
             )
         return AcoustIDCheck(
             "mismatch", detail, best_id, score, release_type=release_type, date=mb_date, originaldate=mb_originaldate,
+            artist=artist, title=title, album=mb_album,
         )
     if summary:
         detail = f"AcoustID suggests '{summary}' (MBID {best_id}, score {score:.2f})"
         return AcoustIDCheck(
             "identified", detail, best_id, score, release_type=release_type, date=mb_date, originaldate=mb_originaldate,
+            artist=artist, title=title, album=mb_album,
         )
     detail = f"AcoustID match found but has no linked MusicBrainz recording (score {score:.2f})"
     return AcoustIDCheck(
         "identified", detail, None, score, release_type=release_type, date=mb_date, originaldate=mb_originaldate,
+        artist=artist, title=title, album=mb_album,
     )
 
 
