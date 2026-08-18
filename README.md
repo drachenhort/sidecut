@@ -93,6 +93,7 @@ In the window:
   it runs on **FLAC and MP3** and applies during **every** AcoustID
   check/run, including both check-only buttons — the way to backfill an
   already-converted MP3 library without reconverting it.
+- **Fill missing tags from MusicBrainz** checkbox: when enabled, automatically fills missing `artist`, `title`, `album`, `musicbrainz_artistid`, `artistsort`, and other relevant tags from the matched MusicBrainz recording/release. Strictly additive (never overwrites existing tags), works on both FLAC and MP3, and runs during both check-only and conversion buttons.
 - Lookups are capped at 4 requests/second total, no matter how many
   parallel jobs are configured — workers block on a shared limiter rather
   than each hammering the API independently.
