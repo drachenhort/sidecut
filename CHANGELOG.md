@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.31]
+
+### Fixed
+- The MusicBrainz tag-fill in 0.30 broke every MusicBrainz lookup:
+  `inc=labels` is not a valid parameter for the recording resource (400
+  Bad Request), silently swallowed by a bare exception handler, so no
+  tags filled at all - confirmed against a real 122-file library, 0
+  filled vs 101 filled once removed. Also: a failed MusicBrainz lookup
+  is no longer silent - it now shows up in the log as "MusicBrainz
+  lookup failed: ..." instead of looking identical to "nothing was
+  missing".
+
 ## [0.30]
 
 ### Fixed
