@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.30]
+
+### Fixed
+- **Fill missing tags from MusicBrainz** silently filled nothing on most
+  files: `_extract_mb_tags` read MusicBrainz JSON keys that don't exist
+  (`artists`, `release-list`, `genre-list`, `tag-list` - legacy XML-style
+  names) instead of the real ones (`artist-credit`, `releases`, `genres`,
+  `tags`). This dropped artist, artistsort, musicbrainz_artistid, album,
+  date, originaldate, releasetype, genre, MusicBrainz Tags,
+  musicbrainz_albumid, and musicbrainz_releasegroupid from every run. Also
+  added `labels` to the MusicBrainz lookup so catalog-number filling (dead
+  until now) has data to work with.
+
 ## [0.29]
 
 ### Added
