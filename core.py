@@ -521,10 +521,12 @@ def _extract_mb_tags(mb_data: dict) -> dict[str, str]:
 
     artists = rec.get("artists") or []
     if artists:
-        main = artists[0].get("name", "")
-        join = artists[0].get("joinphrase", "")
+        main = artists[0]
+        tags["musicbrainz_artistid"] = main.get("id", "")
+        tags["artistsort"] = main.get("sort-name", "")
+        join = main.get("joinphrase", "")
         others = [f"{a.get('name', '')}{a.get('joinphrase', '')}" for a in artists[1:] if a.get("name")]
-        tags["artist"] = "; ".join([main + join] + others)
+        tags["artist"] = "; ".join([main.get("name", "") + join] + others)
         if len(artists) > 1:
             tags["albumartist"] = "; ".join([a.get("name", "") for a in artists[1:] if a.get("name")])
 
@@ -607,6 +609,11 @@ def apply_musicbrainz_tags(path: Path, result: AcoustIDCheck) -> bool:
                 frame_id = key.upper()
                 if not id3.get(frame_id):
                     id3.add(_STANDARD_FRAME_BUILDERS[key](value))
+                    wrote = True
+            elif key in _FREETEXT_DESCRIPTIONS:
+                desc = _FREETEXT_DESCRIPTIONS[key]
+                if not id3.get(f"TXXX:{desc}"):
+                    id3.add(TXXX(encoding=3, desc=desc, text=value))
                     wrote = True
             elif key.startswith("TXXX:"):
                 desc = key.split(":", 1)[1]
