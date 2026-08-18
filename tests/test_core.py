@@ -774,6 +774,101 @@ def test_apply_release_type_never_overwrites_existing_tag_on_mp3(tmp_path: Path)
     assert frame.text == ["single"]
 
 
+def _debbie_gibson_mb_data() -> dict:
+    # Shape verified against a live MusicBrainz /recording/{id} response
+    # (inc=releases+release-groups+artist-credits+tags+genres): the artist
+    # lives under "artist-credit" -> [0] -> "artist", not top-level "artists".
+    return {
+        "id": "mb-recording-1",
+        "title": "Only in My Dreams",
+        "length": 227000,
+        "artist-credit": [
+            {
+                "name": "Debbie Gibson",
+                "joinphrase": "",
+                "artist": {
+                    "id": "mb-artist-1",
+                    "name": "Debbie Gibson",
+                    "sort-name": "Gibson, Debbie",
+                },
+            }
+        ],
+        "release-list": [
+            {
+                "id": "mb-release-1",
+                "title": "Out of the Blue",
+                "date": "1987-08-18",
+                "release-group": {
+                    "id": "mb-release-group-1",
+                    "primary-type": "Album",
+                    "first-release-date": "1987-08-18",
+                },
+            }
+        ],
+        "genre-list": [{"name": "dance-pop"}],
+        "tag-list": [{"name": "80s"}],
+    }
+
+
+def test_extract_mb_tags_reads_artist_credit_not_artists(tmp_path: Path) -> None:
+    # Regression test: _extract_mb_tags used to read rec["artists"], a key
+    # MusicBrainz's API never returns (the real field is "artist-credit"),
+    # so artist/artistsort/albumartist/musicbrainz_artistid silently never
+    # got filled.
+    tags = core._extract_mb_tags(_debbie_gibson_mb_data())
+
+    assert tags["artist"] == "Debbie Gibson"
+    assert tags["artistsort"] == "Gibson, Debbie"
+    assert tags["musicbrainz_artistid"] == "mb-artist-1"
+    assert tags["genre"] == "dance-pop"
+    assert tags["TXXX:MusicBrainz Tags"] == "80s"
+
+
+def test_apply_musicbrainz_tags_writes_missing_tags(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src)
+    result = core.AcoustIDCheck("identified", "detail", "mb-recording-1", 0.9, mb_data=_debbie_gibson_mb_data())
+
+    applied = core.apply_musicbrainz_tags(src, result)
+
+    assert applied is True
+    flac = FLAC(src)
+    assert flac["artist"] == ["Debbie Gibson"]
+    assert flac["artistsort"] == ["Gibson, Debbie"]
+    assert flac["musicbrainz_artistid"] == ["mb-artist-1"]
+    assert flac["album"] == ["Out of the Blue"]
+
+
+def test_apply_musicbrainz_tags_never_overwrites_existing_tags(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src, artist="Existing Artist")
+    result = core.AcoustIDCheck("identified", "detail", "mb-recording-1", 0.9, mb_data=_debbie_gibson_mb_data())
+
+    applied = core.apply_musicbrainz_tags(src, result)
+
+    assert applied is True  # other missing fields still get filled
+    flac = FLAC(src)
+    assert flac["artist"] == ["Existing Artist"]  # untouched
+    assert flac["album"] == ["Out of the Blue"]  # filled in
+
+
+def test_apply_musicbrainz_tags_writes_missing_tags_on_mp3(tmp_path: Path) -> None:
+    src = tmp_path / "song.flac"
+    make_flac(src, artist="Artist", title="Song")
+    with open("/dev/null", "w") as log:
+        assert core.convert_one(src, core.QUALITY_PRESETS["v0"], log).ok
+    mp3 = tmp_path / "song.mp3"
+    result = core.AcoustIDCheck("identified", "detail", "mb-recording-1", 0.9, mb_data=_debbie_gibson_mb_data())
+
+    applied = core.apply_musicbrainz_tags(mp3, result)
+
+    assert applied is True
+    id3 = ID3(mp3)
+    assert str(id3["TPE1"].text[0]) == "Debbie Gibson"
+    assert str(id3["TSOP"].text[0]) == "Gibson, Debbie"
+    assert id3.get("TXXX:MusicBrainz Artist Id").text == ["mb-artist-1"]
+
+
 def test_check_acoustid_reads_existing_tags_from_mp3(tmp_path: Path) -> None:
     # check_acoustid must work on already-converted MP3s (not just FLACs),
     # reading the recording ID from the ID3 UFID frame Picard/this tool

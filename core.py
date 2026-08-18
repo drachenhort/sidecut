@@ -380,7 +380,7 @@ def _musicbrainz_lookup_recording(recording_id: str) -> dict:
     _musicbrainz_rate_limiter.wait()
     response = requests.get(
         f"{MUSICBRAINZ_API_URL}/recording/{recording_id}",
-        params={"inc": "releases+release-groups", "fmt": "json"},
+        params={"inc": "releases+release-groups+artist-credits+tags+genres", "fmt": "json"},
         headers={"User-Agent": MUSICBRAINZ_USER_AGENT},
         timeout=15,
     )
@@ -519,11 +519,12 @@ def _extract_mb_tags(mb_data: dict) -> dict[str, str]:
     if rec.get("title"):
         tags["title"] = rec["title"]
 
-    artists = rec.get("artists") or []
+    artists = rec.get("artist-credit") or []
     if artists:
         main = artists[0]
-        tags["musicbrainz_artistid"] = main.get("id", "")
-        tags["artistsort"] = main.get("sort-name", "")
+        main_artist = main.get("artist") or {}
+        tags["musicbrainz_artistid"] = main_artist.get("id", "")
+        tags["artistsort"] = main_artist.get("sort-name", "")
         join = main.get("joinphrase", "")
         others = [f"{a.get('name', '')}{a.get('joinphrase', '')}" for a in artists[1:] if a.get("name")]
         tags["artist"] = "; ".join([main.get("name", "") + join] + others)
