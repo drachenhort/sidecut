@@ -633,6 +633,11 @@ def test_check_acoustid_provenance_none_when_musicbrainz_lookup_fails(tmp_path: 
     assert result.status == "identified"
     assert result.date is None
     assert result.originaldate is None
+    # Regression: a failed MusicBrainz lookup used to be swallowed with no
+    # trace, so "nothing missing" and "MusicBrainz was unreachable" looked
+    # identical in the log. Now the failure is surfaced in detail.
+    assert "MusicBrainz lookup failed" in result.detail
+    assert "boom" in result.detail
 
 
 def test_apply_release_provenance_writes_missing_tags(tmp_path: Path) -> None:

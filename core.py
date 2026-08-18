@@ -380,7 +380,7 @@ def _musicbrainz_lookup_recording(recording_id: str) -> dict:
     _musicbrainz_rate_limiter.wait()
     response = requests.get(
         f"{MUSICBRAINZ_API_URL}/recording/{recording_id}",
-        params={"inc": "releases+release-groups+artist-credits+tags+genres+labels", "fmt": "json"},
+        params={"inc": "releases+release-groups+artist-credits+tags+genres", "fmt": "json"},
         headers={"User-Agent": MUSICBRAINZ_USER_AGENT},
         timeout=15,
     )
@@ -421,18 +421,20 @@ def _pick_release_provenance(
 
 def _lookup_release_provenance(
     recording_id: str | None, tagged_album: str = ""
-) -> tuple[str | None, str | None, str | None, str | None, dict | None]:
+) -> tuple[str | None, str | None, str | None, str | None, dict | None, str | None]:
     """Query MusicBrainz for the release type, this release's date, its
-    release-group's original release date, the release title (album), and
-    the full recording/release JSON data. Never raises: any failure just
-    means no provenance data, not a failed check."""
+    release-group's original release date, the release title (album), the
+    full recording/release JSON data, and (if the request itself failed) a
+    short error message. Never raises: any failure just means no provenance
+    data, not a failed check - but the error is surfaced in the last field
+    so callers can log it instead of silently reporting "nothing missing"."""
     if not recording_id:
-        return None, None, None, None, None
+        return None, None, None, None, None, None
     try:
         data = _musicbrainz_lookup_recording(recording_id)
-    except requests.RequestException:
-        return None, None, None, None, None
-    return _pick_release_provenance(data.get("releases") or [], tagged_album) + (data,)
+    except requests.RequestException as exc:
+        return None, None, None, None, None, str(exc)
+    return _pick_release_provenance(data.get("releases") or [], tagged_album) + (data, None)
 
 
 _ALBUM_TYPE_DESC = "MusicBrainz Album Type"
@@ -678,13 +680,16 @@ def check_acoustid(path: Path, api_key: str) -> AcoustIDCheck:
     # one in the list, so a "match" result's release-type/date can't end
     # up describing a different recording than the one actually matched.
     provenance_id = existing_id if existing_id in recording_ids else best_id
-    mb_release_type, mb_date, mb_originaldate, mb_album, mb_data = _lookup_release_provenance(provenance_id, tagged_album)
+    mb_release_type, mb_date, mb_originaldate, mb_album, mb_data, mb_error = _lookup_release_provenance(
+        provenance_id, tagged_album
+    )
     release_type = release_type or mb_release_type
+    mb_error_suffix = f" — MusicBrainz lookup failed: {mb_error}" if mb_error else ""
 
     if existing_id:
         if existing_id in recording_ids:
             return AcoustIDCheck(
-                "match", f"Matches tagged recording (score {score:.2f})", existing_id, score,
+                "match", f"Matches tagged recording (score {score:.2f}){mb_error_suffix}", existing_id, score,
                 release_type=release_type, date=mb_date, originaldate=mb_originaldate,
                 artist=artist, title=title, album=mb_album, mb_data=mb_data,
             )
@@ -700,14 +705,14 @@ def check_acoustid(path: Path, api_key: str) -> AcoustIDCheck:
                 f"(score {score:.2f}) has no linked MusicBrainz recording to compare against"
             )
         return AcoustIDCheck(
-            "mismatch", detail, best_id, score, release_type=release_type, date=mb_date, originaldate=mb_originaldate,
-            artist=artist, title=title, album=mb_album, mb_data=mb_data,
+            "mismatch", detail + mb_error_suffix, best_id, score, release_type=release_type, date=mb_date,
+            originaldate=mb_originaldate, artist=artist, title=title, album=mb_album, mb_data=mb_data,
         )
     if summary:
         detail = f"AcoustID suggests '{summary}' (MBID {best_id}, score {score:.2f})"
         return AcoustIDCheck(
-            "identified", detail, best_id, score, release_type=release_type, date=mb_date, originaldate=mb_originaldate,
-            artist=artist, title=title, album=mb_album, mb_data=mb_data,
+            "identified", detail + mb_error_suffix, best_id, score, release_type=release_type, date=mb_date,
+            originaldate=mb_originaldate, artist=artist, title=title, album=mb_album, mb_data=mb_data,
         )
     detail = f"AcoustID match found but has no linked MusicBrainz recording (score {score:.2f})"
     return AcoustIDCheck(
