@@ -1,6 +1,11 @@
+import sys
 from pathlib import Path
 
 import pytest
+
+# Add the project root to sys.path so local modules (config, core, etc.) are importable
+# when running pytest from the project root.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import config
 import core
