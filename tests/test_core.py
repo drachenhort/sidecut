@@ -776,8 +776,10 @@ def test_apply_release_type_never_overwrites_existing_tag_on_mp3(tmp_path: Path)
 
 def _debbie_gibson_mb_data() -> dict:
     # Shape verified against a live MusicBrainz /recording/{id} response
-    # (inc=releases+release-groups+artist-credits+tags+genres): the artist
-    # lives under "artist-credit" -> [0] -> "artist", not top-level "artists".
+    # (inc=releases+release-groups+artist-credits+tags+genres+labels): keys
+    # are flat ("releases", "tags", "genres", "artist-credit") - MusicBrainz's
+    # JSON API does NOT use "-list"-suffixed keys (that's the legacy XML/
+    # musicbrainzngs naming, not what the raw web service actually returns).
     return {
         "id": "mb-recording-1",
         "title": "Only in My Dreams",
@@ -793,7 +795,7 @@ def _debbie_gibson_mb_data() -> dict:
                 },
             }
         ],
-        "release-list": [
+        "releases": [
             {
                 "id": "mb-release-1",
                 "title": "Out of the Blue",
@@ -805,8 +807,8 @@ def _debbie_gibson_mb_data() -> dict:
                 },
             }
         ],
-        "genre-list": [{"name": "dance-pop"}],
-        "tag-list": [{"name": "80s"}],
+        "genres": [{"name": "dance-pop"}],
+        "tags": [{"name": "80s"}],
     }
 
 
@@ -822,6 +824,22 @@ def test_extract_mb_tags_reads_artist_credit_not_artists(tmp_path: Path) -> None
     assert tags["musicbrainz_artistid"] == "mb-artist-1"
     assert tags["genre"] == "dance-pop"
     assert tags["TXXX:MusicBrainz Tags"] == "80s"
+
+
+def test_extract_mb_tags_reads_releases_not_release_list(tmp_path: Path) -> None:
+    # Regression test: _extract_mb_tags used to read rec["release-list"],
+    # rec["genre-list"], rec["tag-list"] - the legacy XML-derived key names,
+    # not what MusicBrainz's JSON web service actually returns ("releases",
+    # "genres", "tags"). This silently dropped album/date/originaldate/
+    # releasetype/musicbrainz_albumid/musicbrainz_releasegroupid too.
+    tags = core._extract_mb_tags(_debbie_gibson_mb_data())
+
+    assert tags["album"] == "Out of the Blue"
+    assert tags["date"] == "1987-08-18"
+    assert tags["originaldate"] == "1987-08-18"
+    assert tags["releasetype"] == "album"
+    assert tags["musicbrainz_albumid"] == "mb-release-1"
+    assert tags["musicbrainz_releasegroupid"] == "mb-release-group-1"
 
 
 def test_apply_musicbrainz_tags_writes_missing_tags(tmp_path: Path) -> None:

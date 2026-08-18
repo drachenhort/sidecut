@@ -380,7 +380,7 @@ def _musicbrainz_lookup_recording(recording_id: str) -> dict:
     _musicbrainz_rate_limiter.wait()
     response = requests.get(
         f"{MUSICBRAINZ_API_URL}/recording/{recording_id}",
-        params={"inc": "releases+release-groups+artist-credits+tags+genres", "fmt": "json"},
+        params={"inc": "releases+release-groups+artist-credits+tags+genres+labels", "fmt": "json"},
         headers={"User-Agent": MUSICBRAINZ_USER_AGENT},
         timeout=15,
     )
@@ -512,7 +512,7 @@ def _extract_mb_tags(mb_data: dict) -> dict[str, str]:
         return tags
 
     rec = mb_data
-    releases = rec.get("release-list") or []
+    releases = rec.get("releases") or []
     release = releases[0] if releases else {}
     rg = release.get("release-group") or {}
 
@@ -556,11 +556,11 @@ def _extract_mb_tags(mb_data: dict) -> dict[str, str]:
         if catalog:
             tags["TXXX:MusicBrainz Album Catalog No"] = catalog
 
-    genres = [g.get("name", "") for g in (rec.get("genre-list") or []) if g.get("name")]
+    genres = [g.get("name", "") for g in (rec.get("genres") or []) if g.get("name")]
     if genres:
         tags["genre"] = "; ".join(genres)
 
-    mb_tags = [t.get("name", "") for t in (rec.get("tag-list") or []) if t.get("name")]
+    mb_tags = [t.get("name", "") for t in (rec.get("tags") or []) if t.get("name")]
     if mb_tags:
         tags["TXXX:MusicBrainz Tags"] = "; ".join(mb_tags)
 
