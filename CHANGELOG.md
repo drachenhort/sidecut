@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.29]
+
 ### Added
 - **Fill missing tags from MusicBrainz** checkbox in the AcoustID settings: when enabled, automatically fills missing `artist`, `title`, `album`, `musicbrainz_artistid`, `artistsort`, and other relevant tags from the matched MusicBrainz recording/release. Strictly additive (never overwrites existing tags), works on both FLAC and MP3, and runs during both check-only and conversion buttons.
 
