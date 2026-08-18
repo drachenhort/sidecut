@@ -205,6 +205,7 @@ class AcoustIDCheck:
     artist: str = ""
     title: str = ""
     album: str = ""
+    mb_data: dict | None = None
 
 
 @dataclass
@@ -420,18 +421,18 @@ def _pick_release_provenance(
 
 def _lookup_release_provenance(
     recording_id: str | None, tagged_album: str = ""
-) -> tuple[str | None, str | None, str | None, str | None]:
+) -> tuple[str | None, str | None, str | None, str | None, dict | None]:
     """Query MusicBrainz for the release type, this release's date, its
-    release-group's original release date, and the release title (album),
-    keyed off a MusicBrainz recording ID. Never raises: any failure just
+    release-group's original release date, the release title (album), and
+    the full recording/release JSON data. Never raises: any failure just
     means no provenance data, not a failed check."""
     if not recording_id:
-        return None, None, None, None
+        return None, None, None, None, None
     try:
         data = _musicbrainz_lookup_recording(recording_id)
     except requests.RequestException:
-        return None, None, None, None
-    return _pick_release_provenance(data.get("releases") or [], tagged_album)
+        return None, None, None, None, None
+    return _pick_release_provenance(data.get("releases") or [], tagged_album) + (data,)
 
 
 _ALBUM_TYPE_DESC = "MusicBrainz Album Type"
@@ -504,40 +505,114 @@ def apply_release_provenance(path: Path, result: AcoustIDCheck) -> bool:
     return False
 
 
+def _extract_mb_tags(mb_data: dict) -> dict[str, str]:
+    """Extract a flat dict of tag key -> value from MusicBrainz recording/release JSON."""
+    tags: dict[str, str] = {}
+    if not mb_data:
+        return tags
+
+    rec = mb_data
+    releases = rec.get("release-list") or []
+    release = releases[0] if releases else {}
+    rg = release.get("release-group") or {}
+
+    if rec.get("title"):
+        tags["title"] = rec["title"]
+
+    artists = rec.get("artists") or []
+    if artists:
+        main = artists[0].get("name", "")
+        join = artists[0].get("joinphrase", "")
+        others = [f"{a.get('name', '')}{a.get('joinphrase', '')}" for a in artists[1:] if a.get("name")]
+        tags["artist"] = "; ".join([main + join] + others)
+        if len(artists) > 1:
+            tags["albumartist"] = "; ".join([a.get("name", "") for a in artists[1:] if a.get("name")])
+
+    if release.get("title"):
+        tags["album"] = release["title"]
+
+    if release.get("date"):
+        tags["date"] = release["date"]
+    if rg.get("first-release-date"):
+        tags["originaldate"] = rg["first-release-date"]
+
+    primary = rg.get("primary-type")
+    secondary = rg.get("secondary-types") or []
+    if primary:
+        tags["releasetype"] = primary.lower()
+    if "Compilation" in secondary:
+        tags["releasetype"] = "compilation"
+
+    if release.get("barcode"):
+        tags["TXXX:MusicBrainz Album Barcode"] = release["barcode"]
+    if release.get("asin"):
+        tags["TXXX:MusicBrainz ASIN"] = release["asin"]
+    label_info = release.get("label-info") or []
+    if label_info:
+        catalog = label_info[0].get("catalog-number")
+        if catalog:
+            tags["TXXX:MusicBrainz Album Catalog No"] = catalog
+
+    genres = [g.get("name", "") for g in (rec.get("genre-list") or []) if g.get("name")]
+    if genres:
+        tags["genre"] = "; ".join(genres)
+
+    mb_tags = [t.get("name", "") for t in (rec.get("tag-list") or []) if t.get("name")]
+    if mb_tags:
+        tags["TXXX:MusicBrainz Tags"] = "; ".join(mb_tags)
+
+    if rec.get("length"):
+        tags["TXXX:MusicBrainz Recording Length"] = str(rec["length"])
+
+    tags["musicbrainz_trackid"] = rec.get("id", "")
+    if release.get("id"):
+        tags["musicbrainz_albumid"] = release["id"]
+    if rg.get("id"):
+        tags["musicbrainz_releasegroupid"] = rg["id"]
+
+    return tags
+
+
 def apply_musicbrainz_tags(path: Path, result: AcoustIDCheck) -> bool:
-    """Fill missing Artist, Title, and Album tags from the matched MusicBrainz
-    recording. Only writes if the tag is currently missing. Returns True if
-    anything was written."""
-    if not result.artist and not result.title and not result.album:
+    """Fill missing tags from the matched MusicBrainz recording/release.
+    Only writes if the tag is currently missing. Returns True if anything
+    was written."""
+    mb_tags = _extract_mb_tags(result.mb_data)
+    if not mb_tags:
         return False
     suffix = path.suffix.lower()
     if suffix == ".flac":
         tags = FLAC(path)
         wrote = False
-        if result.artist and not tags.get("artist"):
-            tags["artist"] = [result.artist]
-            wrote = True
-        if result.title and not tags.get("title"):
-            tags["title"] = [result.title]
-            wrote = True
-        if result.album and not tags.get("album"):
-            tags["album"] = [result.album]
-            wrote = True
+        for key, value in mb_tags.items():
+            if not tags.get(key):
+                tags[key] = [value]
+                wrote = True
         if wrote:
             tags.save()
         return wrote
     elif suffix == ".mp3":
         id3 = ID3(path)
         wrote = False
-        if result.artist and not id3.get("TPE1"):
-            id3.add(TPE1(encoding=3, text=result.artist))
-            wrote = True
-        if result.title and not id3.get("TIT2"):
-            id3.add(TIT2(encoding=3, text=result.title))
-            wrote = True
-        if result.album and not id3.get("TALB"):
-            id3.add(TALB(encoding=3, text=result.album))
-            wrote = True
+        for key, value in mb_tags.items():
+            if key == "musicbrainz_trackid":
+                if not id3.get(f"UFID:{_UFID_OWNER}"):
+                    id3.add(UFID(owner=_UFID_OWNER, data=value.encode("ascii", "ignore")))
+                    wrote = True
+            elif key == "releasetype":
+                if not id3.get("TXXX:MusicBrainz Album Type"):
+                    id3.add(TXXX(encoding=3, desc="MusicBrainz Album Type", text=value))
+                    wrote = True
+            elif key in _STANDARD_FRAME_BUILDERS:
+                frame_id = key.upper()
+                if not id3.get(frame_id):
+                    id3.add(_STANDARD_FRAME_BUILDERS[key](value))
+                    wrote = True
+            elif key.startswith("TXXX:"):
+                desc = key.split(":", 1)[1]
+                if not id3.get(f"TXXX:{desc}"):
+                    id3.add(TXXX(encoding=3, desc=desc, text=value))
+                    wrote = True
         if wrote:
             id3.save(path, v2_version=3)
         return wrote
@@ -595,7 +670,7 @@ def check_acoustid(path: Path, api_key: str) -> AcoustIDCheck:
     # one in the list, so a "match" result's release-type/date can't end
     # up describing a different recording than the one actually matched.
     provenance_id = existing_id if existing_id in recording_ids else best_id
-    mb_release_type, mb_date, mb_originaldate, mb_album = _lookup_release_provenance(provenance_id, tagged_album)
+    mb_release_type, mb_date, mb_originaldate, mb_album, mb_data = _lookup_release_provenance(provenance_id, tagged_album)
     release_type = release_type or mb_release_type
 
     if existing_id:
@@ -603,7 +678,7 @@ def check_acoustid(path: Path, api_key: str) -> AcoustIDCheck:
             return AcoustIDCheck(
                 "match", f"Matches tagged recording (score {score:.2f})", existing_id, score,
                 release_type=release_type, date=mb_date, originaldate=mb_originaldate,
-                artist=artist, title=title, album=mb_album,
+                artist=artist, title=title, album=mb_album, mb_data=mb_data,
             )
         tagged = f"{tagged_artist} - {tagged_title}".strip(" -") or existing_id
         if summary:
@@ -618,18 +693,18 @@ def check_acoustid(path: Path, api_key: str) -> AcoustIDCheck:
             )
         return AcoustIDCheck(
             "mismatch", detail, best_id, score, release_type=release_type, date=mb_date, originaldate=mb_originaldate,
-            artist=artist, title=title, album=mb_album,
+            artist=artist, title=title, album=mb_album, mb_data=mb_data,
         )
     if summary:
         detail = f"AcoustID suggests '{summary}' (MBID {best_id}, score {score:.2f})"
         return AcoustIDCheck(
             "identified", detail, best_id, score, release_type=release_type, date=mb_date, originaldate=mb_originaldate,
-            artist=artist, title=title, album=mb_album,
+            artist=artist, title=title, album=mb_album, mb_data=mb_data,
         )
     detail = f"AcoustID match found but has no linked MusicBrainz recording (score {score:.2f})"
     return AcoustIDCheck(
         "identified", detail, None, score, release_type=release_type, date=mb_date, originaldate=mb_originaldate,
-        artist=artist, title=title, album=mb_album,
+        artist=artist, title=title, album=mb_album, mb_data=mb_data,
     )
 
 
