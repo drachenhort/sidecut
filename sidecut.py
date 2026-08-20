@@ -2186,7 +2186,7 @@ def main() -> None:
         sys.exit(lidarr_hook.run_from_environment())
 
     app = QApplication(sys.argv)
-    app.setDesktopFileName("flac2mp3")  # distinct WM_CLASS so the taskbar doesn't group this with other python3 scripts
+    app.setDesktopFileName("sidecut")  # distinct WM_CLASS so the taskbar doesn't group this with other python3 scripts
     icon_path = Path(__file__).parent / "icons" / "acoustid_256.png"
     if icon_path.is_file():
         app.setWindowIcon(QIcon(str(icon_path)))
