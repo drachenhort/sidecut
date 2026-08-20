@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.32]
+
+### Added
+- **Scan Missing Tags** button: a read-only scan of a folder's audio files
+  for core tags (title/artist/album/tracknumber/date), showing
+  complete/incomplete counts, a bar chart of missing counts per tag, and
+  the list of incomplete files - input for a future MusicBrainz tag-fill
+  pass.
+
+### Fixed
+- The taskbar/window manager identified Sidecut's windows by the generic
+  `python3` process class, colliding with any other bare `python3
+  script.py` app (e.g. it showed grouped with an unrelated app,
+  RadioTop). `QApplication.setDesktopFileName("sidecut")` now gives it
+  its own WM_CLASS.
+
 ## [0.31]
 
 ### Fixed
