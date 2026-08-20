@@ -301,6 +301,48 @@ def test_plan_declutter_moves_combines_reissues_and_compilations_in_one_walk(tmp
     }
 
 
+def test_scan_missing_tags_counts_complete_and_incomplete(tmp_path: Path) -> None:
+    complete = tmp_path / "complete.flac"
+    make_flac(complete, title="Song", artist="Artist", album="Album", track="1", date="2020-01-01")
+
+    incomplete = tmp_path / "incomplete.flac"
+    make_flac(incomplete, title="Song 2")  # missing artist/album/tracknumber/date
+
+    report = library_stats.scan_missing_tags(tmp_path)
+
+    assert report.total_files == 2
+    assert report.complete_count == 1
+    assert report.incomplete_count == 1
+    assert report.incomplete_files == [incomplete]
+    assert report.missing_by_tag == {"artist": 1, "album": 1, "tracknumber": 1, "date": 1}
+
+
+def test_scan_missing_tags_reads_mp3_id3_frames(tmp_path: Path) -> None:
+    flac_src = tmp_path / "song.flac"
+    make_flac(flac_src, title="Song", artist="Artist", album="Album", track="1", date="2020-01-01")
+    with open("/dev/null", "w") as log:
+        result = core.convert_one(flac_src, core.QUALITY_PRESETS["v0"], log)
+    assert result.ok
+
+    report = library_stats.scan_missing_tags(tmp_path)
+
+    assert report.total_files == 1  # convert_one deletes the source .flac on success
+    assert report.incomplete_files == []
+    assert report.complete_count == 1
+
+
+def test_scan_missing_tags_only_lists_incomplete_files(tmp_path: Path) -> None:
+    complete = tmp_path / "complete.flac"
+    make_flac(complete, title="Song", artist="Artist", album="Album", track="1", date="2020-01-01")
+    other_complete = tmp_path / "complete2.flac"
+    make_flac(other_complete, title="Song 2", artist="Artist", album="Album", track="2", date="2020-01-01")
+
+    report = library_stats.scan_missing_tags(tmp_path)
+
+    assert report.incomplete_files == []
+    assert report.complete_count == 2
+
+
 def test_plan_declutter_moves_skips_releases_already_sorted(tmp_path: Path) -> None:
     already_sorted_reissue = tmp_path / "Simple Minds" / "Reissues" / "Album (1998 Remaster)"
     already_sorted_reissue.mkdir(parents=True)

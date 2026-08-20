@@ -219,6 +219,83 @@ def plan_declutter_moves(root: Path) -> list[DeclutterMove]:
     return _plan_moves(root, None)
 
 
+CORE_TAG_FIELDS = ("title", "artist", "album", "tracknumber", "date")
+_ID3_FRAME_FOR_FIELD = {
+    "title": "TIT2",
+    "artist": "TPE1",
+    "album": "TALB",
+    "tracknumber": "TRCK",
+    "date": "TDRC",
+}
+
+
+@dataclass
+class MissingTagsReport:
+    """Result of scan_missing_tags: how many files were scanned, how many
+    are missing at least one of CORE_TAG_FIELDS, a per-tag count of how
+    many files lack that specific tag, and the paths of the incomplete
+    files themselves - the input a later "fill missing tags via
+    MusicBrainz" feature would act on. Files with every core tag present
+    are not tracked individually; only the counts reflect them."""
+
+    total_files: int
+    complete_count: int
+    incomplete_count: int
+    missing_by_tag: Counter[str]
+    incomplete_files: list[Path]
+
+
+def _missing_fields(path: Path) -> list[str]:
+    """Which of CORE_TAG_FIELDS are absent/empty on `path`. Unreadable
+    files count as missing every field, same fail-soft policy as
+    _read_release_tags."""
+    try:
+        suffix = path.suffix.lower()
+        if suffix == ".flac":
+            tags = FLAC(path)
+            return [field for field in CORE_TAG_FIELDS if not tags.get(field)]
+        if suffix == ".mp3":
+            id3 = ID3(path)
+            missing = []
+            for field in CORE_TAG_FIELDS:
+                frame = id3.get(_ID3_FRAME_FOR_FIELD[field])
+                if not (frame and frame.text and frame.text[0]):
+                    missing.append(field)
+            return missing
+    except Exception:  # noqa: BLE001 - diagnostic scan, never fatal
+        return list(CORE_TAG_FIELDS)
+    return list(CORE_TAG_FIELDS)
+
+
+def scan_missing_tags(root: Path) -> MissingTagsReport:
+    """Walk `root` recursively and check every audio file (not release
+    directories - tag completeness is a per-track property) against
+    CORE_TAG_FIELDS. Read-only; never modifies files."""
+    total = 0
+    complete = 0
+    missing_by_tag: Counter[str] = Counter()
+    incomplete_files: list[Path] = []
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for name in sorted(filenames):
+            if Path(name).suffix.lower() not in _AUDIO_EXTENSIONS:
+                continue
+            total += 1
+            path = Path(dirpath) / name
+            missing = _missing_fields(path)
+            if not missing:
+                complete += 1
+                continue
+            missing_by_tag.update(missing)
+            incomplete_files.append(path)
+    return MissingTagsReport(
+        total_files=total,
+        complete_count=complete,
+        incomplete_count=len(incomplete_files),
+        missing_by_tag=missing_by_tag,
+        incomplete_files=incomplete_files,
+    )
+
+
 def execute_declutter_moves(moves: list[DeclutterMove]) -> None:
     """Perform every `selected` move from a plan_*_moves() call, in place:
     each DeclutterMove's `error` is set to None on success or a message on

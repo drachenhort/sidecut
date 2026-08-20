@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLayout,
     QLineEdit,
+    QListWidget,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
@@ -710,6 +711,61 @@ class LibraryStatsWorker(QThread):
         self.scan_finished.emit(types, provenance)
 
 
+class MissingTagsWorker(QThread):
+    """Runs library_stats.scan_missing_tags() off the UI thread, since
+    tag-reading a whole library can take a while."""
+
+    scan_finished = Signal(object)  # library_stats.MissingTagsReport
+    scan_error = Signal(str)
+
+    def __init__(self, folder: Path) -> None:
+        super().__init__()
+        self.folder = folder
+
+    def run(self) -> None:
+        try:
+            report = library_stats.scan_missing_tags(self.folder)
+        except Exception as exc:  # noqa: BLE001 - report to the UI, don't die silently
+            self.scan_error.emit(str(exc))
+            return
+        self.scan_finished.emit(report)
+
+
+class MissingTagsWindow(QDialog):
+    """Standalone, non-modal window showing how many audio files are fully
+    tagged vs. missing at least one core tag (title/artist/album/track
+    number/date), a bar chart of missing counts per tag, and the list of
+    incomplete files - the input a later "fill missing tags via
+    MusicBrainz" feature would act on."""
+
+    def __init__(self, report: library_stats.MissingTagsReport, folder: Path, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Missing Tags")
+        self.resize(720, 800)
+
+        layout = QVBoxLayout(self)
+        header = QLabel(
+            f"<b>{report.total_files}</b> file(s) scanned under {folder}: "
+            f"<b>{report.complete_count}</b> fully tagged, "
+            f"<b>{report.incomplete_count}</b> missing at least one tag"
+        )
+        header.setWordWrap(True)
+        layout.addWidget(header)
+
+        if report.total_files == 0:
+            layout.addWidget(QLabel("No .flac/.mp3 files were found."))
+            return
+
+        if report.missing_by_tag:
+            layout.addWidget(_build_bar_chart(report.missing_by_tag, "Files missing each tag"))
+
+        layout.addWidget(QLabel("Files missing at least one tag:"))
+        file_list = QListWidget()
+        for path in report.incomplete_files:
+            file_list.addItem(str(path))
+        layout.addWidget(file_list, stretch=1)
+
+
 def _build_bar_chart(counts: Counter[str], title: str) -> QChartView:
     """One horizontal bar chart, most common category first - reads better
     than a pie chart once there are more than a handful of categories,
@@ -1169,6 +1225,7 @@ class MainWindow(QMainWindow):
         self.lidarr_log_window: LidarrImportLogWindow | None = None
         self.folder_scan_worker: FolderScanWorker | None = None
         self.library_stats_worker: LibraryStatsWorker | None = None
+        self.missing_tags_worker: MissingTagsWorker | None = None
         self.library_stats_window: LibraryStatsWindow | None = None
         self.declutter_scan_worker: DeclutterScanWorker | None = None
         self.declutter_sort_dialog: DeclutterSortDialog | None = None
@@ -1242,6 +1299,16 @@ class MainWindow(QMainWindow):
         self.library_stats_button.setEnabled(False)
         self.library_stats_button.clicked.connect(self._start_library_stats_scan)
 
+        self.missing_tags_button = QPushButton("Scan Missing Tags")
+        self.missing_tags_button.setToolTip(
+            "Scans this folder recursively (read-only, nothing is modified) and checks each\n"
+            "audio file's title/artist/album/track number/date tags, showing how many files\n"
+            "are fully tagged vs. missing at least one tag. The incomplete files are listed\n"
+            "for later use by a MusicBrainz tag-filling pass."
+        )
+        self.missing_tags_button.setEnabled(False)
+        self.missing_tags_button.clicked.connect(self._start_missing_tags_scan)
+
         self.sort_declutter_button = QPushButton("Sort Reissues/Compilations...")
         self.sort_declutter_button.setToolTip(
             "Scans this folder recursively (read-only) for releases classified as reissues\n"
@@ -1258,6 +1325,7 @@ class MainWindow(QMainWindow):
         row.addWidget(self.folder_edit, stretch=1)
         row.addWidget(browse_button)
         row.addWidget(self.library_stats_button)
+        row.addWidget(self.missing_tags_button)
         row.addWidget(self.sort_declutter_button)
         return row
 
@@ -1509,6 +1577,7 @@ class MainWindow(QMainWindow):
             self.lidarr_force_reimport_plan_worker,
             self.folder_scan_worker,
             self.library_stats_worker,
+            self.missing_tags_worker,
             self.declutter_scan_worker,
             self._incremental_import_worker,
         ):
@@ -1595,6 +1664,7 @@ class MainWindow(QMainWindow):
         self.lidarr_import_button.setEnabled(True)
         self.lidarr_force_reimport_button.setEnabled(True)
         self.library_stats_button.setEnabled(True)
+        self.missing_tags_button.setEnabled(True)
         self.sort_declutter_button.setEnabled(True)
         if self.files:
             suffix = f" (capped at {len(self.files)}, more may exist)" if capped else ""
@@ -1799,6 +1869,30 @@ class MainWindow(QMainWindow):
     def _on_library_stats_error(self, message: str) -> None:
         self.library_stats_button.setEnabled(True)
         self.status_label.setText(f"Collection summary failed: {message}")
+        QMessageBox.critical(self, "Sidecut", message)
+
+    def _start_missing_tags_scan(self) -> None:
+        folder = Path(self.folder_edit.text())
+        self.missing_tags_button.setEnabled(False)
+        self.status_label.setText(f"Scanning {folder} for missing tags...")
+
+        self.missing_tags_worker = MissingTagsWorker(folder)
+        self.missing_tags_worker.scan_finished.connect(self._on_missing_tags_finished)
+        self.missing_tags_worker.scan_error.connect(self._on_missing_tags_error)
+        self.missing_tags_worker.start()
+
+    def _on_missing_tags_finished(self, report: library_stats.MissingTagsReport) -> None:
+        self.missing_tags_button.setEnabled(True)
+        self.status_label.setText(
+            f"Missing tags scan: {report.complete_count} complete, {report.incomplete_count} incomplete"
+        )
+        folder = Path(self.folder_edit.text())
+        self.missing_tags_window = MissingTagsWindow(report, folder, self)
+        self.missing_tags_window.show()
+
+    def _on_missing_tags_error(self, message: str) -> None:
+        self.missing_tags_button.setEnabled(True)
+        self.status_label.setText(f"Missing tags scan failed: {message}")
         QMessageBox.critical(self, "Sidecut", message)
 
     def _start_declutter_scan(self) -> None:
@@ -2092,6 +2186,7 @@ def main() -> None:
         sys.exit(lidarr_hook.run_from_environment())
 
     app = QApplication(sys.argv)
+    app.setDesktopFileName("flac2mp3")  # distinct WM_CLASS so the taskbar doesn't group this with other python3 scripts
     icon_path = Path(__file__).parent / "icons" / "acoustid_256.png"
     if icon_path.is_file():
         app.setWindowIcon(QIcon(str(icon_path)))
